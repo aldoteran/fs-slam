@@ -11,7 +11,7 @@
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
-#include <gtsam/navigation/ImuFactor.h>
+#include <gtsam/navigation/CombinedImuFactor.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
@@ -42,6 +42,10 @@ class GraphManager {
     return Eigen::Affine3d(dead_reckoning_.matrix());
   }
 
+  /// Preintegrates an IMU measurement onto the `odometer_` and `accumulator_`.
+  void AddImuMeasurement(const Eigen::Vector3d &accel,
+                         const Eigen::Vector3d &omega, const double dt);
+
  private:
   //! Initialize the noise models using specified parameters.
   void SetupNoiseModels();
@@ -70,6 +74,16 @@ class GraphManager {
   gtsam::Pose3 cur_pose_estimate_ = gtsam::Pose3();
   //! Contains the hitherto dead reckoning pose estimate (initially at origin).
   gtsam::Pose3 dead_reckoning_ = gtsam::Pose3();
+
+  // IMU related variables and functions.
+
+  /// Odometer for IMU preintegration between keyframes.
+  std::shared_ptr<gtsam::PreintegratedCombinedMeasurements> odometer_ = nullptr;
+  /// Accumulator for IMU dead reckoning.
+  std::shared_ptr<gtsam::PreintegratedCombinedMeasurements> accumulator_ =
+      nullptr;
+  /// Instantiates odometers with custom properties.
+  void SetupOdometers();
 
   //! Initializes the factor graph with first pose estimate and prior.
   void InitFactorGraph(const gtsam::Pose3 &pose);

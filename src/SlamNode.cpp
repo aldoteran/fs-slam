@@ -52,6 +52,11 @@ void SlamNode::InitGraphManager() {
 void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
   // TODO (tonioteran): implement me.
   ROS_WARN("ImuMeasCallback() to be implemented!");
+  Eigen::Vector3d accel = {msg.linear_acceleration.x, msg.linear_acceleration.y,
+                           msg.linear_acceleration.y};
+  Eigen::Vector3d omega = {msg.angular_velocity.x, msg.angular_velocity.y,
+                           msg.angular_velocity.y};
+  gm_->AddImuMeasurement(accel, omega, 0.001); // TODO FAKE dt!!!
 }
 
 }  // namespace fsslam
