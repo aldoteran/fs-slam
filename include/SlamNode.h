@@ -9,6 +9,8 @@
 #ifndef FS_SLAM_SLAM_NODE_H_
 #define FS_SLAM_SLAM_NODE_H_
 
+#include "GraphManager.h"
+
 #include <ros/console.h>
 #include <ros/ros.h>
 
@@ -38,6 +40,8 @@ class SlamNode {
   void ReadParams();
   //! Setup Ros subscribers, publishers, services, etc.
   void SetupRos();
+  //! Initializes the backend SLAM object using defined parameters.
+  void InitGraphManager();
 
   //! Ros node handle.
   ros::NodeHandle nh_;
@@ -65,6 +69,9 @@ class SlamNode {
   double imu_accel_stddev_;
   //! Standard deviation parameter for IMU's angluar velocity component [???].
   double imu_omega_stddev_;
+
+  //! Factor graph manager for SAM and inference.
+  std::unique_ptr<GraphManager> gm_ = nullptr;
 };
 
 }  // namespace fsslam

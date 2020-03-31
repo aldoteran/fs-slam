@@ -13,6 +13,7 @@ namespace fsslam {
 SlamNode::SlamNode() {
   ReadParams();
   SetupRos();
+  InitGraphManager();
 }
 
 SlamNode::~SlamNode() {}
@@ -41,6 +42,11 @@ void SlamNode::SetupRos() {
   dead_reckoning_pub_ =
       nh_.advertise<nav_msgs::Path>(dead_reckoning_topic_, 1000);
   dead_reckoning_path_.header.frame_id = dead_reckoning_frame_id_;
+}
+
+void SlamNode::InitGraphManager() {
+  gm_ = std::make_unique<GraphManager>(prior_pos_stddev_, prior_rot_stddev_,
+                                       imu_accel_stddev_, imu_omega_stddev_);
 }
 
 void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
