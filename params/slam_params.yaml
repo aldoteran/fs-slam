@@ -6,7 +6,7 @@ node_loop_rate: 50
 # Topic in which the IMU measurements are being received.
 imu_meas_topic: /rexrov/imu
 
-# Measurement noise characterisicts:
+# Measurement noise characteristics:
 # TODO(tonioteran) UNINFORMED GUESSES FOR EVERYTHING.
 # --Prior factors:
 # Standard deviation of the prior information's translation components [m].
@@ -18,7 +18,10 @@ prior_rot_stddev: 0.000001
 imu_accel_stddev: 0.001
 # Standard deviation for the angular velocity measurements [???].
 imu_omega_stddev: 0.001
+# Measurement frequency [Hz].
+imu_frequency: 50.0
+
 
 # SLAM estimate publishers.
 dead_reckoning_topic: /slam/dead_reckoning
-dead_reckoning_frame_id: map
+dead_reckoning_frame_id: world
