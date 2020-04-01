@@ -56,11 +56,11 @@ class LandmarkDetector:
         """
         Extract the features from the input image.
 
-        :params img: image to extract the features from
-        :type img: np.ndarray
+        :params imgs: pair of images to extract and match features from
+        :type imgs: list of tuples [(img1,stamp), (img2,stamp)]
 
-        :return: extracted features
-        :rtype: don't know yet
+        :return: extracted keypoints and correspondances
+        :rtype: list [(keypoints_img1, keypoints_img2), cv2.BFMatcher.knnMatch]
         """
         tic = timeit.timeit()
         (keypts1, descript1) = self.detector.detectAndCompute(imgs[0][0], None)
@@ -88,7 +88,7 @@ class LandmarkDetector:
         img_msg = self.bridge.cv2_to_imgmsg(feat_img, encoding="passthrough")
         self.image_pub.publish(img_msg)
 
-        return [imgs, (keypts1, keypts2), good_matches]
+        return [(keypts1, keypts2), good_matches]
 
 def main():
     rospy.init_node('feature_extraction')
