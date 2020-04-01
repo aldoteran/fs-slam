@@ -14,6 +14,7 @@
 #include <ros/console.h>
 #include <ros/ros.h>
 
+#include <eigen_conversions/eigen_msg.h>
 #include <nav_msgs/Path.h>
 #include <sensor_msgs/Imu.h>
 
@@ -34,6 +35,12 @@ class SlamNode {
 
   //! Desired frequency at which to operate the ROS node [hz].
   int loop_rate_ = 50;
+
+  /// Publish hitherto dead reckoned path.
+  void PublishDeadReckonPath();
+
+  // Utilities. TODO(tonioteran) Should move to external file.
+  geometry_msgs::PoseStamped TransformToPose(const Eigen::Affine3d &tfm);
 
  private:
   //! Reads in the yaml file with configuration parameters.
@@ -69,6 +76,9 @@ class SlamNode {
   double imu_accel_stddev_;
   //! Standard deviation parameter for IMU's angluar velocity component [???].
   double imu_omega_stddev_;
+
+  /// IMU measurements sampling frequency [s].
+  double imu_dt_ = 0.02;  // 50 Hz.
 
   //! Factor graph manager for SAM and inference.
   std::unique_ptr<GraphManager> gm_ = nullptr;

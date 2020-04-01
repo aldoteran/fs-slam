@@ -96,6 +96,7 @@ void GraphManager::AddImuMeasurement(const Eigen::Vector3d &accel,
 
   // Generate the dead-reckoned pose estimate.
   gtsam::NavState dead_reckon = accumulator_->predict(state_origin, bias);
+  dead_reckoning_ = dead_reckon.pose();
   std::cout << dead_reckon.t() << std::endl;
 }
 

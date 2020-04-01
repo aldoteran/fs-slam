@@ -37,7 +37,7 @@ class GraphManager {
                const double imu_accel_stddev, const double imu_omega_stddev);
   virtual ~GraphManager();
 
-  //! Get the latest dead reckoned pose estimate.
+  /// Predict dead reckoning pose using the accumulated IMU measurements.
   inline const Eigen::Affine3d GetDeadReckoning() const {
     return Eigen::Affine3d(dead_reckoning_.matrix());
   }
