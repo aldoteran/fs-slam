@@ -12,8 +12,11 @@ find_package(catkin REQUIRED
   tf
   tf2
   tf2_geometry_msgs
+  eigen_conversions
+  std_msgs
   geometry_msgs
   nav_msgs
+  sensor_msgs
   )
 
 catkin_package(
