@@ -12,6 +12,7 @@ import numpy as np
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, PointCloud2
 from geometry_msgs.msg import PoseWithCovariance
+from visualization_msgs.msg import Marker, MarkerArray
 
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
@@ -48,10 +49,10 @@ class Landmark:
         self.pixels_img2 = tuple(np.round(keypts2[key2].pt).astype(int))
         # These are the measurements of m_i from img1(X_a) and img2(X_b)
         #TODO(aldoteran): should these be gaussian random vars?
-        self.cart_img1 = np.array([[range_map[self.pixels_img1[0]]],
-                                [swath_map[self.pixels_img1[1]]]])
-        self.cart_img2 = np.array([[range_map[self.pixels_img2[0]]],
-                                [swath_map[self.pixels_img2[1]]]])
+        self.cart_img1 = np.array([[range_map[self.pixels_img1[1]]],
+                                [swath_map[self.pixels_img1[0]]]])
+        self.cart_img2 = np.array([[range_map[self.pixels_img2[1]]],
+                                [swath_map[self.pixels_img2[0]]]])
         self.polar_img1 = self._cart_to_polar(self.cart_img1)
         self.polar_img2 = self._cart_to_polar(self.cart_img2)
         # init elevation and phi to 0
@@ -106,6 +107,8 @@ class LandmarkDetector:
                                         queue_size=1)
         self.image_pub = rospy.Publisher('/features_debug',
                                          Image, queue_size=1)
+        self.marker_pub = rospy.Publisher('/landmarks',
+                                         MarkerArray, queue_size=1)
 
     def _image_cb(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
@@ -143,6 +146,7 @@ class LandmarkDetector:
         swath_res = (abs(swath_min) + swath_max) / 478 #img.shape[1]
         self.range_map = np.arange(0.0, range_max, range_res)
         self.swath_map = np.arange(swath_min, swath_max, swath_res)
+        self.sonar_frame = msg.header.frame_id
 
         self.is_init = True
 
@@ -203,25 +207,51 @@ class LandmarkDetector:
                           for match in features[2]]
         #TODO(aldoteran): for m_i in landmarks find optimal phi.
 
+        # for debugging
+        #TODO(aldoteran): cacacacacacaca
+        landmarkers = MarkerArray()
+        for i,l in enumerate(self.landmarks):
+            landmarkers.markers.append(self._create_marker(l,i, imgs))
+        self.marker_pub.publish(landmarkers)
+
+    def _create_marker(self, landmark, idx, imgs):
+        # create markers to display in rviz for debugging
+        marker = Marker()
+        marker.header.stamp = imgs[0][1]
+        marker.header.frame_id = self.sonar_frame
+        marker.ns = 'landmark'
+        marker.id = idx
+        marker.type = marker.SPHERE
+        marker.action = marker.ADD
+        marker.scale.x = 0.2
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
+        marker.color.g = 1.0
+        marker.color.a = 1.0
+        marker.pose.position.x = landmark.cart_img1[1]
+        marker.pose.position.z = landmark.cart_img1[0]
+
+        return marker
+
+
+
 def main():
     rospy.init_node('feature_extraction')
     detector = LandmarkDetector(features='AKAZE')
-    rospy.sleep(1)
+    rospy.sleep(2)
     # initialize with two first images
     if len(detector.img_buff) >= 2:
         img1 = detector.img_buff.pop(0)
         img2 = detector.img_buff.pop(0)
         features = detector.extact_n_match([img1, img2])
         detector.generate_landmarks([img1, img2], features)
-        import pdb
-        pdb.set_trace()
-
     while not rospy.is_shutdown():
         if len(detector.img_buff) >= 1:
             # drop only first image
             img1 = img2
             img2 = detector.img_buff.pop(0)
-            detector.extact_n_match([img1, img2])
+            features = detector.extact_n_match([img1, img2])
+            detector.generate_landmarks([img1, img2], features)
 
 if __name__ == '__main__':
     main()
