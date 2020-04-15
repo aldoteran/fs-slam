@@ -45,7 +45,7 @@ class Landmark:
     :type map2: tuple (x,y,z,stamp)
 
     """
-    def __init__(self, keypts1, keypts2, map1, map2, key1, key2):
+    def __init__(self, keypts1, keypts2, map1, map2, key1, key2, T_Xb):
         self.pixels_img1 = tuple(np.flip(np.round(keypts1[key1].pt).astype(int)))
         self.pixels_img2 = tuple(np.flip(np.round(keypts2[key2].pt).astype(int)))
         # ground truth for m_i from img1(X_a) and img2(X_b)
@@ -65,6 +65,8 @@ class Landmark:
         # measurements in polar coordinates
         self.polar_img1 = self.cart_to_polar(self.cart_img1)
         self.polar_img2 = self.cart_to_polar(self.cart_img2)
+        # relative pose between img1 and img2 T_Xb
+        self.rel_pose = T_Xb
 
     def update_phi(self, phi):
         # Updates phi and elevation attributes (wrt X_a/img1)
@@ -253,23 +255,14 @@ class LandmarkDetector:
         :return: list of landmarks with updated elevation angle
         :rtype: list [Landmark_0,...,Landmark_N]
         """
+        T_Xb = self._relative_pose(imgs)
+
         self.landmarks = [Landmark(features[0], features[1], maps[0], maps[1],
-                                   match[0].queryIdx, match[0].trainIdx,)
+                                   match[0].queryIdx, match[0].trainIdx, T_Xb)
                           for match in features[2]]
 
-        # get poses and compute T_xb, following notation from the paper:
-        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/rexrov/forward_sonar_optical_frame',
-                                                         '/world', imgs[0][-1])
-        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/rexrov/forward_sonar_optical_frame',
-                                                         '/world', imgs[1][-1])
-        Xa = tf.transformations.quaternion_matrix(rot_Xa)
-        Xa[:-1, -1] = np.asarray(trans_Xa)
-        Xb = tf.transformations.quaternion_matrix(rot_Xb)
-        Xb[:-1, -1] = np.asarray(trans_Xb)
-        T_Xb = np.dot(np.linalg.pinv(Xa), Xb)
-
         #TODO(aldoteran): import from config file
-        # I believe that the VFOV from the depth camera is 63 deg, res=0.5deg
+        # VFOV from the depth camera in gazebo is 63 deg, res=0.5deg
         phi_range = np.arange(-0.5497789, 0.5497789, 0.008726)
         sigma = np.float32(np.diag((0.01, 0.01)))
         for l in self.landmarks:
@@ -290,7 +283,31 @@ class LandmarkDetector:
                 landmarkers.markers.append(self._create_marker_est(l,i+len(self.landmarks), imgs))
             self.marker_pub.publish(landmarkers)
 
-        return self.landamarks
+        return self.landmarks
+
+    def _relative_pose(self, imgs):
+        """
+        Compute the relative pose T_Xb between two frames. Uses the timestamp of each
+        image to look for the TF wrt to the world frame.
+
+        :params imgs: pair of images to extract and match features from
+        :type imgs: list of tuples [(img1,stamp), (img2,stamp)]
+
+        :return: relative pose T_Xb expressed as an homogenous transformation matrix
+        :rtype: np.array (4,4)
+        """
+        # get poses and compute T_xb, following notation from the paper:
+        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/rexrov/forward_sonar_optical_frame',
+                                                         '/world', imgs[0][-1])
+        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/rexrov/forward_sonar_optical_frame',
+                                                         '/world', imgs[1][-1])
+        Xa = tf.transformations.quaternion_matrix(rot_Xa)
+        Xa[:-1, -1] = np.asarray(trans_Xa)
+        Xb = tf.transformations.quaternion_matrix(rot_Xb)
+        Xb[:-1, -1] = np.asarray(trans_Xb)
+        T_Xb = np.dot(np.linalg.pinv(Xa), Xb)
+
+        return T_Xb
 
     def _opt_phi_search(self, landmark, T_Xb, sigma, phi_range):
         """
@@ -308,8 +325,6 @@ class LandmarkDetector:
         z_b = landmark.polar_img2
         error = np.zeros((proj.shape[1], 1), dtype=np.float32)
         for i in range(proj.shape[1]):
-            # polar_proj = landmark.cart_to_polar(proj[:,i:i+1])
-            # innov = polar_proj - np.float32(z_b)
             innov = np.float32(landmark.cart_to_polar(proj[:,i:i+1])) - np.float32(z_b)
             error[i] = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
         phi_star_idx = np.argmin(error)
@@ -358,8 +373,6 @@ class LandmarkDetector:
 
         return marker
 
-
-
 def main():
     rospy.init_node('feature_extraction')
     detector = LandmarkDetector(features='AKAZE')
@@ -373,8 +386,6 @@ def main():
         features = detector.extact_n_match([img1, img2])
         detector.generate_landmarks([img1, img2], features,
                                     [maps_img1, maps_img2])
-        import pdb
-        pdb.set_trace()
     while not rospy.is_shutdown():
         if len(detector.img_buff) >= 1 & len(detector.cart_map_buff) >=1:
             # drop only first image
