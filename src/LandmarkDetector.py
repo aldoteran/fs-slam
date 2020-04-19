@@ -11,8 +11,8 @@ import ros_numpy
 import numpy as np
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image#, PointCloud2
-from geometry_msgs.msg import PoseWithCovariance
 from visualization_msgs.msg import Marker, MarkerArray
+from BundleAdjuster import BundleAdjuster
 
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
@@ -67,31 +67,53 @@ class Landmark:
         self.polar_img2 = self.cart_to_polar(self.cart_img2)
         # relative pose between img1 and img2 T_Xb
         self.rel_pose = T_Xb
+        # ground truth for phi, for debugging
+        self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
 
     def update_phi(self, phi):
         # Updates phi and elevation attributes (wrt X_a/img1)
         self.phi = phi
-        self.elevation = self.cart_img1[0] * np.sin(phi)
+        self.elevation = self.polar_img1[1,0] * np.sin(phi)
+
+    def prediction_hb(self, state):
+        """
+        Computes the prediction equation h_bi which projects the
+        landmarks from pose Xa (img1) onto Xb by means of the calculated
+        relative pose T_xb (rel_pose).
+
+        :return: predicted cartesian and range-bearing measurement of landmark from Xa to Xb
+        :rtype: tuple (np.array [X,Y,Z], np.array [theta range])
+        """
+        # wrt A
+        x = self.cart_img1[0,0]
+        y = self.cart_img1[1,0]
+        z = self.elevation
+        T_Xb = self.rel_pose
+
+        q = T_Xb[:-1,0:-1].transpose().dot(np.array([[x],[y],[z]]) - T_Xb[:-1,-1:])
+
+        return (q, self.cart_to_polar(q))
 
     def project_coords(self, phi):
         """
         Returns the projection of the X, Y and Z coordinates
         given the elevation angle phi. Used for the search for
         the optimal phi. Initial coords are from img1, i.e., as
-        seen from pose X_a.
+        seen from pose X_a. Permutes the output vector to follow
+        the ROS convention for an optical frame (Z,X,Y)
 
         :param phi: elevation angle in radians
         :type phi: float
 
-        :return: X, Y and Z coordinates of the landmark
-        :rtype: np.array (3,1)
+        :return: Z, X and Y coordinates of the landmark
+        :rtype: np.array (3,1) [Z,X,Y]
         """
         r = self.polar_img1[1,0]
         theta = self.polar_img1[0,0]
 
-        return np.array([[r * np.cos(theta) * np.cos(phi)],
-                         [r * np.sin(theta) * np.cos(phi)],
-                         [r * np.sin(phi)]])
+        return np.array([[r * np.sin(phi)],
+                         [r * np.cos(theta) * np.cos(phi)],
+                         [r * np.sin(theta) * np.cos(phi)]])
 
     def cart_to_polar(self, cart):
         return np.array([[np.arctan2(cart[1,0],cart[0,0])],
@@ -131,13 +153,11 @@ class LandmarkDetector:
         # rospy.Subscriber("/rexrov/points", PointCloud2, self._pts_cb)
 
         #### PUBLISHERS ####
-        self.pose_pub = rospy.Publisher('/sonar_constraint',
-                                        PoseWithCovariance,
-                                        queue_size=1)
         self.image_pub = rospy.Publisher('/features_debug', Image,
                                          queue_size=1)
         self.marker_pub = rospy.Publisher('/landmarks', MarkerArray,
                                           queue_size=1)
+        self.tf_pub = tf.TransformBroadcaster()
 
     def _image_cb(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
@@ -265,18 +285,21 @@ class LandmarkDetector:
         # VFOV from the depth camera in gazebo is 63 deg, res=0.5deg
         phi_range = np.arange(-0.5497789, 0.5497789, 0.008726)
         sigma = np.float32(np.diag((0.01, 0.01)))
-        for l in self.landmarks:
+
+        inliers = []
+        for i,l in enumerate(self.landmarks):
             if l.is_shit:
                 continue
             phi_star = self._opt_phi_search(l, T_Xb, sigma, phi_range)
             l.update_phi(phi_star)
+            inliers.append(i)
+        # get rid of poorly contrained landmarks
+        self.landmarks = np.asarray(self.landmarks)[inliers].tolist()
 
         # for debugging, publish landmark markers
         if self.is_verbose:
             landmarkers = MarkerArray()
             for i,l in enumerate(self.landmarks):
-                if l.is_shit:
-                    continue
                 # Green ground truth markers
                 landmarkers.markers.append(self._create_marker(l,i, imgs))
                 # Red estimated markers
@@ -297,15 +320,26 @@ class LandmarkDetector:
         :rtype: np.array (4,4)
         """
         # get poses and compute T_xb, following notation from the paper:
-        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/rexrov/forward_sonar_optical_frame',
-                                                         '/world', imgs[0][-1])
-        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/rexrov/forward_sonar_optical_frame',
-                                                         '/world', imgs[1][-1])
+        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                            '/rexrov/forward_sonar_optical_frame',
+                                                            imgs[0][-1])
+        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                            '/rexrov/forward_sonar_optical_frame',
+                                                            imgs[1][-1])
         Xa = tf.transformations.quaternion_matrix(rot_Xa)
         Xa[:-1, -1] = np.asarray(trans_Xa)
         Xb = tf.transformations.quaternion_matrix(rot_Xb)
         Xb[:-1, -1] = np.asarray(trans_Xb)
-        T_Xb = np.dot(np.linalg.pinv(Xa), Xb)
+        T_Xb = np.linalg.inv(Xa).dot(Xb)
+
+        # for debugging
+        rot_Xb = np.copy(T_Xb)
+        rot_Xb[0:-1,-1] = 0.0
+        self.tf_pub.sendTransform((T_Xb[0,-1], T_Xb[1,-1], T_Xb[2,-1]),
+                                  tf.transformations.quaternion_from_matrix(rot_Xb),
+                                  rospy.Time.now(),
+                                  "/Xb",
+                                  "/rexrov/forward_sonar_optical_frame")
 
         return T_Xb
 
@@ -314,13 +348,18 @@ class LandmarkDetector:
         Search for optimal phi using the list of phis in phi_range.
         """
         rot_Xb = T_Xb[:-1,:-1]
-        trans_Xb = np.expand_dims(T_Xb[:-1,-1],1)
+        trans_Xb = T_Xb[:-1,-1:]
 
+        # TODO: permutate cartesian coordinate bc of ROS TF convention difference
         # project landmarks from X_a in X_b using all phis
         proj = [(landmark.project_coords(phi) - trans_Xb)
                  for phi in phi_range]
-        proj = np.squeeze(np.asarray(proj))
-        proj = np.dot(rot_Xb, proj.transpose())
+        proj = np.squeeze(np.asarray(proj)).transpose()
+        proj = rot_Xb.transpose().dot(proj)
+        # change vector order back
+        proj = np.array([proj[2,:],
+                         proj[0,:],
+                         proj[1,:]])
         # compute error vector
         z_b = landmark.polar_img2
         error = np.zeros((proj.shape[1], 1), dtype=np.float32)
@@ -346,9 +385,9 @@ class LandmarkDetector:
         marker.color.g = 1.0
         marker.color.a = 1.0
         marker.lifetime = rospy.Duration(0.5)
-        marker.pose.position.x = landmark.cart_img2[1]
-        marker.pose.position.y = landmark.cart_img2[2]
-        marker.pose.position.z = landmark.cart_img2[0]
+        marker.pose.position.x = landmark.cart_img2[1,0]
+        marker.pose.position.y = landmark.cart_img2[2,0]
+        marker.pose.position.z = landmark.cart_img2[0,0]
 
         return marker
 
@@ -376,6 +415,7 @@ class LandmarkDetector:
 def main():
     rospy.init_node('feature_extraction')
     detector = LandmarkDetector(features='AKAZE')
+    bundler = BundleAdjuster()
     rospy.sleep(2)
     # initialize with two first images
     if len(detector.img_buff) >= 2:
@@ -384,8 +424,9 @@ def main():
         maps_img1 = detector.cart_map_buff.pop(0)
         maps_img2 = detector.cart_map_buff.pop(0)
         features = detector.extact_n_match([img1, img2])
-        detector.generate_landmarks([img1, img2], features,
-                                    [maps_img1, maps_img2])
+        landmarks = detector.generate_landmarks([img1, img2], features,
+                                                [maps_img1, maps_img2])
+        bundler.compute_constraint(landmarks)
     while not rospy.is_shutdown():
         if len(detector.img_buff) >= 1 & len(detector.cart_map_buff) >=1:
             # drop only first image
@@ -395,19 +436,10 @@ def main():
             maps_img1 = maps_img2
             maps_img2 = detector.cart_map_buff.pop(0)
             features = detector.extact_n_match([img1, img2])
-            detector.generate_landmarks([img1, img2], features,
-                                        [maps_img1, maps_img2])
+            landmarks = detector.generate_landmarks([img1, img2], features,
+                                                    [maps_img1, maps_img2])
+            bundler.compute_constraint(landmarks)
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
-
-
-
 
