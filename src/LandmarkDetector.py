@@ -45,7 +45,7 @@ class Landmark:
     :type map2: tuple (x,y,z,stamp)
 
     """
-    def __init__(self, keypts1, keypts2, map1, map2, key1, key2, T_Xb):
+    def __init__(self, keypts1, keypts2, map1, map2, key1, key2, T_Xb, Xb, Xa):
         self.pixels_img1 = tuple(np.flip(np.round(keypts1[key1].pt).astype(int)))
         self.pixels_img2 = tuple(np.flip(np.round(keypts2[key2].pt).astype(int)))
         # ground truth for m_i from img1(X_a) and img2(X_b)
@@ -65,55 +65,39 @@ class Landmark:
         # measurements in polar coordinates
         self.polar_img1 = self.cart_to_polar(self.cart_img1)
         self.polar_img2 = self.cart_to_polar(self.cart_img2)
-        # relative pose between img1 and img2 T_Xb
-        self.rel_pose = T_Xb
         # ground truth for phi, for debugging
         self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
+        # relative pose between img1 and img2 T_Xb
+        self.rel_pose = T_Xb
+        # pose from img2 (Xa)
+        self.Xa = Xa
+        # pose from img2 (Xb)
+        self.Xb = Xb
 
     def update_phi(self, phi):
         # Updates phi and elevation attributes (wrt X_a/img1)
         self.phi = phi
         self.elevation = self.polar_img1[1,0] * np.sin(phi)
 
-    def prediction_hb(self, state):
-        """
-        Computes the prediction equation h_bi which projects the
-        landmarks from pose Xa (img1) onto Xb by means of the calculated
-        relative pose T_xb (rel_pose).
-
-        :return: predicted cartesian and range-bearing measurement of landmark from Xa to Xb
-        :rtype: tuple (np.array [X,Y,Z], np.array [theta range])
-        """
-        # wrt A
-        x = self.cart_img1[0,0]
-        y = self.cart_img1[1,0]
-        z = self.elevation
-        T_Xb = self.rel_pose
-
-        q = T_Xb[:-1,0:-1].transpose().dot(np.array([[x],[y],[z]]) - T_Xb[:-1,-1:])
-
-        return (q, self.cart_to_polar(q))
-
     def project_coords(self, phi):
         """
         Returns the projection of the X, Y and Z coordinates
         given the elevation angle phi. Used for the search for
         the optimal phi. Initial coords are from img1, i.e., as
-        seen from pose X_a. Permutes the output vector to follow
-        the ROS convention for an optical frame (Z,X,Y)
+        seen from pose X_a.
 
         :param phi: elevation angle in radians
         :type phi: float
 
         :return: Z, X and Y coordinates of the landmark
-        :rtype: np.array (3,1) [Z,X,Y]
+        :rtype: np.array (3,1) [X,Y,Z]
         """
         r = self.polar_img1[1,0]
         theta = self.polar_img1[0,0]
 
-        return np.array([[r * np.sin(phi)],
-                         [r * np.cos(theta) * np.cos(phi)],
-                         [r * np.sin(theta) * np.cos(phi)]])
+        return np.array([[r * np.cos(theta) * np.cos(phi)],
+                         [r * np.sin(theta) * np.cos(phi)],
+                         [r * np.sin(phi)]])
 
     def cart_to_polar(self, cart):
         return np.array([[np.arctan2(cart[1,0],cart[0,0])],
@@ -275,36 +259,38 @@ class LandmarkDetector:
         :return: list of landmarks with updated elevation angle
         :rtype: list [Landmark_0,...,Landmark_N]
         """
-        T_Xb = self._relative_pose(imgs)
+        T_Xb, Xb, Xa = self._relative_pose(imgs)
 
         self.landmarks = [Landmark(features[0], features[1], maps[0], maps[1],
-                                   match[0].queryIdx, match[0].trainIdx, T_Xb)
+                                   match[0].queryIdx, match[0].trainIdx,
+                                   T_Xb, Xb, Xa)
                           for match in features[2]]
 
         #TODO(aldoteran): import from config file
         # VFOV from the depth camera in gazebo is 63 deg, res=0.5deg
-        phi_range = np.arange(-0.5497789, 0.5497789, 0.008726)
+        phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         sigma = np.float32(np.diag((0.01, 0.01)))
 
         inliers = []
+        # TODO(aldoteran): fix this shit
         for i,l in enumerate(self.landmarks):
             if l.is_shit:
                 continue
-            phi_star = self._opt_phi_search(l, T_Xb, sigma, phi_range)
-            l.update_phi(phi_star)
+            # phi_star = self._opt_phi_search(l, T_Xb, sigma, phi_range, imgs)
+            # l.update_phi(phi_star)
             inliers.append(i)
         # get rid of poorly contrained landmarks
         self.landmarks = np.asarray(self.landmarks)[inliers].tolist()
 
         # for debugging, publish landmark markers
-        if self.is_verbose:
-            landmarkers = MarkerArray()
-            for i,l in enumerate(self.landmarks):
-                # Green ground truth markers
-                landmarkers.markers.append(self._create_marker(l,i, imgs))
-                # Red estimated markers
-                landmarkers.markers.append(self._create_marker_est(l,i+len(self.landmarks), imgs))
-            self.marker_pub.publish(landmarkers)
+        # if self.is_verbose:
+            # landmarkers = MarkerArray()
+            # for i,l in enumerate(self.landmarks):
+                # # Green ground truth markers
+                # landmarkers.markers.append(self._create_marker(l,i, imgs))
+                # # Red estimated markers
+                # landmarkers.markers.append(self._create_marker_est(l,i+len(self.landmarks), imgs))
+            # self.marker_pub.publish(landmarkers)
 
         return self.landmarks
 
@@ -333,47 +319,43 @@ class LandmarkDetector:
         T_Xb = np.linalg.inv(Xa).dot(Xb)
 
         # for debugging
-        rot_Xb = np.copy(T_Xb)
-        rot_Xb[0:-1,-1] = 0.0
-        self.tf_pub.sendTransform((T_Xb[0,-1], T_Xb[1,-1], T_Xb[2,-1]),
-                                  tf.transformations.quaternion_from_matrix(rot_Xb),
-                                  rospy.Time.now(),
-                                  "/Xb",
-                                  "/rexrov/forward_sonar_optical_frame")
+        if self.is_verbose:
+            rot_Xb = np.copy(T_Xb)
+            rot_Xb[0:-1,-1] = 0.0
+            self.tf_pub.sendTransform((T_Xb[0,-1], T_Xb[1,-1], T_Xb[2,-1]),
+                                    tf.transformations.quaternion_from_matrix(rot_Xb),
+                                    imgs[1][-1],
+                                    "/Xb",
+                                    "/rexrov/forward_sonar_optical_frame")
 
-        return T_Xb
+        return (T_Xb, Xb, Xa)
 
-    def _opt_phi_search(self, landmark, T_Xb, sigma, phi_range):
+    def _opt_phi_search(self, landmark, T_Xb, sigma, phi_range, imgs):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
         rot_Xb = T_Xb[:-1,:-1]
         trans_Xb = T_Xb[:-1,-1:]
 
-        # TODO: permutate cartesian coordinate bc of ROS TF convention difference
-        # project landmarks from X_a in X_b using all phis
-        proj = [(landmark.project_coords(phi) - trans_Xb)
-                 for phi in phi_range]
-        proj = np.squeeze(np.asarray(proj)).transpose()
-        proj = rot_Xb.transpose().dot(proj)
-        # change vector order back
-        proj = np.array([proj[2,:],
-                         proj[0,:],
-                         proj[1,:]])
-        # compute error vector
+        best_phi = 1.0
+        old_error = 9999
         z_b = landmark.polar_img2
-        error = np.zeros((proj.shape[1], 1), dtype=np.float32)
-        for i in range(proj.shape[1]):
-            innov = np.float32(landmark.cart_to_polar(proj[:,i:i+1])) - np.float32(z_b)
-            error[i] = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
-        phi_star_idx = np.argmin(error)
+        for phi in phi_range:
+            q_i = rot_Xb.transpose().dot(landmark.project_coords(phi) - trans_Xb)
+            innov = landmark.cart_to_polar(q_i) - z_b
+            error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
+            if error < old_error:
+                best_phi = phi
+                old_error = error
 
-        return phi_range[phi_star_idx]
+        return best_phi
+        # return landmark.real_phi
 
     def _create_marker(self, landmark, idx, imgs):
         # create markers to display in rviz for debugging
         marker = Marker()
         marker.header.stamp = imgs[0][1]
+        # marker.header.frame_id = '/Xb'
         marker.header.frame_id = '/rexrov/forward_sonar_optical_frame'
         marker.ns = 'landmark'
         marker.id = idx
@@ -385,9 +367,31 @@ class LandmarkDetector:
         marker.color.g = 1.0
         marker.color.a = 1.0
         marker.lifetime = rospy.Duration(0.5)
-        marker.pose.position.x = landmark.cart_img2[1,0]
-        marker.pose.position.y = landmark.cart_img2[2,0]
-        marker.pose.position.z = landmark.cart_img2[0,0]
+        marker.pose.position.x = landmark.cart_img1[1,0]
+        marker.pose.position.y = landmark.cart_img1[2,0]
+        marker.pose.position.z = landmark.cart_img1[0,0]
+
+        return marker
+
+    def _create_marker_proj(self, idx, cart, imgs):
+        # create markers to display in rviz for debugging
+        marker = Marker()
+        marker.header.stamp = imgs[0][1]
+        # marker.header.frame_id = '/Xb'
+        marker.header.frame_id = '/Xb'
+        marker.ns = 'landmark'
+        marker.id = idx
+        marker.type = marker.SPHERE
+        marker.action = marker.ADD
+        marker.scale.x = 0.2
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+        marker.lifetime = rospy.Duration(0.5)
+        marker.pose.position.x = cart[1,0]
+        marker.pose.position.y = cart[2,0]
+        marker.pose.position.z = cart[0,0]
 
         return marker
 
@@ -395,7 +399,7 @@ class LandmarkDetector:
         # create markers to display in rviz for debugging
         marker = Marker()
         marker.header.stamp = imgs[0][1]
-        marker.header.frame_id = '/rexrov/forward_sonar_optical_frame'
+        marker.header.frame_id = '/Xb'
         marker.ns = 'landmark'
         marker.id = idx
         marker.type = marker.SPHERE
@@ -406,9 +410,10 @@ class LandmarkDetector:
         marker.color.r = 1.0
         marker.color.a = 1.0
         marker.lifetime = rospy.Duration(0.5)
-        marker.pose.position.x = landmark.cart_img2[1]
+        marker.pose.position.x = landmark.cart_img2[1,0]
         marker.pose.position.y = landmark.elevation
-        marker.pose.position.z = landmark.cart_img2[0]
+        # marker.pose.position.y = landmark.cart_img2[2,0]
+        marker.pose.position.z = landmark.cart_img2[0,0]
 
         return marker
 
