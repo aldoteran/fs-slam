@@ -41,3 +41,6 @@ add_dependencies(slam_node ${catkin_EXPORTED_TARGETS})
 target_include_directories(slam_node PUBLIC ./include/)
 target_link_libraries(slam_node ${catkin_LIBRARIES} gtsam)
 
+# Add examples directory.
+add_subdirectory(examples)
+
