@@ -10,7 +10,8 @@ import timeit
 import numpy as np
 from nav_msgs.msg import Odometry
 # from LandmarkDetector import LandmarkDetector
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseWithCovariance
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovariance, PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
 
 __license__ = "MIT"
@@ -26,9 +27,12 @@ class BundleAdjuster:
 
         self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         #### PUBLISHERS ####
-        self.pose_pub = rospy.Publisher('/sonar_constraint',
+        self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
                                         PoseWithCovarianceStamped,
                                         queue_size=1)
+        self.pose_constraint_pub = rospy.Publisher('/bundle_adjustment/sonar_constraint',
+                                                   PoseStamped,
+                                                   queue_size=1)
         self.odom_pub = rospy.Publisher('/sonar_odometry', Odometry,
                                         queue_size=1)
         self.true_odom_pub = rospy.Publisher('/true_sonar_odometry', Odometry,
@@ -61,7 +65,7 @@ class BundleAdjuster:
         error_old = 9e6
 
         # Gauss-Newton NLS optimization
-        for it in range(1000):
+        for it in range(5):
             # (1) Get relative pose btwn Xa and optimized pose Xb
             if it > 0:
                 # T_Xb = self._update_transform(Xa, x_init)
@@ -87,8 +91,8 @@ class BundleAdjuster:
             x_new = x_init + delta_new
             error = np.linalg.norm(delta_new - delta_old)
             rospy.logwarn("Update error for iter {}: {}".format(it, error))
-            # if error_old < error:
-                # break
+            if error_old < error:
+                break
             delta_old = np.copy(delta_new)
             error_old = error
             x_init = np.copy(x_new)
@@ -97,6 +101,7 @@ class BundleAdjuster:
         rospy.logwarn("Gauss-Newton executed in {} seconds".format(toc - tic))
         # self._publish_pose(x_new, sigma)
         self._publish_paper_pose(x_new, sigma)
+        self._publish_pose_constraint(T_Xb)
         self._publish_true_odom(Xb)
 
     def _opt_phi_search(self, x, z_b, T_Xb, sigma, N):
@@ -264,10 +269,7 @@ class BundleAdjuster:
                               [x[12+i+1,0]],
                               [phis[j]]])
             b_a[i:i+2,:] = sqrt_sigma.dot(z_a[i:i+2,:] - polar[0:2,:])
-            # q_i = rot_Xb.transpose().dot(self.to_ROS(self.polar_to_cart(polar)) - trans_Xb)
             q_i = rot_Xb.transpose().dot(self.polar_to_cart(polar) - trans_Xb)
-            # b_b[i:i+2,:] = self.wrap_to_pi(sqrt_sigma.dot(z_b[i:i+2,:] \
-                                           # - self.cart_to_polar(self.from_ROS(q_i))))
             b_b[i:i+2,:] = sqrt_sigma.dot(z_b[i:i+2,:] - self.cart_to_polar(q_i))
 
         return np.vstack((b_a, b_b))
@@ -389,6 +391,30 @@ class BundleAdjuster:
         sonar_odom.pose = sonar_pose
         self.odom_pub.publish(sonar_odom)
 
+    def _publish_pose_constraint(self, T_Xb):
+        """
+        Publish the sonar pose constraint to add in the factor graph.
+        Contains the relative transformation between two sonar images.
+
+        :param T_Xb: Relative transformation matrix
+        :type T_Xb: np.array (4,4)
+        """
+        trans_Xb = T_Xb[:-1,-1:]
+        quat = tf.transformations.quaternion_from_matrix(T_Xb)
+        quat = self.normalize_quat(quat)
+
+        sonar_constraint = PoseStamped()
+        sonar_constraint.header.frame_id = "/sonar_pose_constraint"
+        sonar_constraint.header.stamp = rospy.Time.now()
+        sonar_constraint.pose.position.x = trans_Xb[0,0]
+        sonar_constraint.pose.position.y = trans_Xb[1,0]
+        sonar_constraint.pose.position.z = trans_Xb[2,0]
+        sonar_constraint.pose.orientation.x = quat[0]
+        sonar_constraint.pose.orientation.y = quat[1]
+        sonar_constraint.pose.orientation.z = quat[2]
+        sonar_constraint.pose.orientation.w = quat[3]
+        self.pose_constraint_pub.publish(sonar_constraint)
+
     def _publish_paper_pose(self, x, sigma):
         """
         TODO
@@ -468,40 +494,6 @@ class BundleAdjuster:
         length = np.linalg.norm(quat)
 
         return (quat/length).tolist()
-
-
-    def to_ROS(self, cart):
-        """
-        Permutes a numpy array of cartesian coordinates to ROS'
-        opitcal frame convention.
-
-        :param cart: cartesian coordinates
-        :type cart: np.array (3,1) [Z,X,Y]
-
-        :return: permuted cartesian coordinates
-        :rtype: np.array (3,1) [X,Y,Z]
-        """
-        return np.array([[cart[1,0]],
-                         [cart[2,0]],
-                         [cart[0,0]]])
-
-    def from_ROS(self, inv_cart):
-        """
-        Performs the inverse permutation of the to_ROS method.
-
-        :param inv_cart: cartesian coords
-        :type inv_cart: np.array (3,1) [X,Y,Z]
-
-        :return: permuted cartesian coordinates
-        :rtype: np.array (3,1) [Z,X,Y]
-        """
-        return np.array([[inv_cart[2,0]],
-                         [inv_cart[0,0]],
-                         [inv_cart[1,0]]])
-
-    def wrap_to_pi(self, polar):
-        return np.array([[(polar[0,0] + np.pi) % (2 * np.pi) - np.pi],
-                         [polar[1,0]]])
 
     def polar_to_cart(self, polar):
         return np.array([[polar[1,0] * np.cos(polar[0,0]) * np.cos(polar[2,0])],

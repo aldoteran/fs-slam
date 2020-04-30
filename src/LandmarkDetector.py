@@ -7,7 +7,6 @@ import rospy
 import tf
 import cv2
 import timeit
-import ros_numpy
 import numpy as np
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image#, PointCloud2
@@ -122,6 +121,7 @@ class LandmarkDetector:
         self.detector = self.feat_dict[features]
         self.bridge = CvBridge()
         self.is_verbose = verbose
+        self.is_init = False
         self.img_buff = []
         self.cart_map_buff = []
         self.pcl_buff = []
@@ -134,7 +134,6 @@ class LandmarkDetector:
                          Image, self._image_cb)
         rospy.Subscriber('/rexrov/depth/image_raw_depth_raw_sonar',
                          Image, self._range_cb)
-        # rospy.Subscriber("/rexrov/points", PointCloud2, self._pts_cb)
 
         #### PUBLISHERS ####
         self.image_pub = rospy.Publisher('/features_debug', Image,
@@ -159,52 +158,12 @@ class LandmarkDetector:
         """
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
         stamp = msg.header.stamp
-        # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9,9))
-        # self.cart_map_buff.append((cv2.dilate(img[:,:,0], kernel, iterations=2),
-                                   # cv2.dilate(img[:,:,1], kernel, iterations=2),
-                                   # cv2.dilate(img[:,:,2], kernel, iterations=2),
-                                   # stamp))
         self.cart_map_buff.append((img[:,:,0],
                                    img[:,:,1],
                                    img[:,:,2],
                                    stamp))
         if len(self.cart_map_buff) >= self.BUFF_LEN:
             self.cart_map_buff.pop(0)
-
-    def _pts_cb(self, msg):
-        """
-        [DEPRECATED] Creates two vectors using the information in the pointcloud.
-        The combination of those vectors will represent the X and Y
-        cartesian coordinates of each pixel in the sonar image with
-        the same timestamp.
-        NOTE: PointCloud2 message comes with ROS camera frame convention:
-              Z -> Forward, X -> Right, Y -> Down.
-        """
-        # if self.is_init:
-            # return
-
-        pcl = ros_numpy.point_cloud2.pointcloud2_to_array(msg, squeeze=False)
-        self.pcl_buff.append(pcl)
-
-        ranges = pcl['z'][0]
-        swaths = pcl['x'][0]
-        # remove NaNs
-        ranges = ranges[~np.isnan(ranges)]
-        swaths = swaths[~np.isnan(swaths)]
-        # get max ranges and resolutions
-        range_max = max(ranges)
-        swath_max = max(swaths)
-        swath_min = min(swaths)
-        #TODO(aldoteran): make img shape available globally
-        range_res = range_max / 400 #img.shape[0]
-        swath_res = (abs(swath_min) + swath_max) / 478 #img.shape[1]
-        range_map = np.arange(0.0, range_max, range_res)
-        swath_map = np.arange(swath_min, swath_max, swath_res)
-
-        self.sonar_frame = msg.header.frame_id
-        stamp = msg.header.stamp
-        self.cart_map_buff.append((range_map, swath_map, stamp))
-
 
     def extact_n_match(self, imgs):
         """
@@ -305,13 +264,25 @@ class LandmarkDetector:
         :return: relative pose T_Xb expressed as an homogenous transformation matrix
         :rtype: np.array (4,4)
         """
-        # get poses and compute T_xb, following notation from the paper:
-        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                            '/rexrov/forward_sonar_optical_frame',
-                                                            imgs[0][-1])
-        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                            '/rexrov/forward_sonar_optical_frame',
-                                                            imgs[1][-1])
+        try:
+            # get poses and compute T_xb from the optimized path.
+            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                '/slam/sonar_optimized_link',
+                                                                imgs[0][-1])
+            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                '/slam/sonar_optimized_link',
+                                                                imgs[1][-1])
+        except:
+            rospy.logwarn("Using IMU odometry instead of optimized pose.")
+            # get poses and compute T_xb from the IMU odometry.
+            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                '/sonar/odom_link',
+                                                                imgs[0][-1])
+            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                '/sonar/odom_link',
+                                                                imgs[1][-1])
+            self.is_init = True
+
         Xa = tf.transformations.quaternion_matrix(rot_Xa)
         Xa[:-1, -1] = np.asarray(trans_Xa)
         Xb = tf.transformations.quaternion_matrix(rot_Xb)
