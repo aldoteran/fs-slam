@@ -33,8 +33,21 @@ void GraphManager::SetupNoiseModels() {
   prior_sigmas << prior_pos_stddev_, prior_pos_stddev_, prior_pos_stddev_,
       prior_rot_stddev_, prior_rot_stddev_, prior_rot_stddev_;
   prior_noise_ = gtsam::noiseModel::Diagonal::Sigmas(prior_sigmas);
-
-  // TODO (tonioteran): setup the IMU noise model.
+  // Setup velocity noise model.
+  gtsam::Vector vel_sigmas(3);
+  vel_sigmas << vel_stddev_, vel_stddev_, vel_stddev_;
+  vel_noise_ = gtsam::noiseModel::Diagonal::Sigmas(vel_sigmas);
+  // Fixed IMU noise
+  gtsam::Vector imu_sigmas(6);
+  imu_sigmas << imu_accel_stddev_, imu_accel_stddev_, imu_accel_stddev_,
+      imu_omega_stddev_, imu_omega_stddev_, imu_omega_stddev_;
+  imu_noise_ = gtsam::noiseModel::Diagonal::Sigmas(imu_sigmas);
+  // Prior IMU bias.
+  gtsam::Vector imu_bias_sigmas(6);
+  imu_bias_sigmas << imu_accel_bias_stddev_, imu_accel_bias_stddev_,
+                     imu_accel_bias_stddev_, imu_omega_bias_stddev_,
+                     imu_omega_bias_stddev_, imu_omega_bias_stddev_;
+  imu_bias_noise_ = gtsam::noiseModel::Diagonal::Sigmas(imu_bias_sigmas);
 }
 
 void GraphManager::SetupiSAM() {
@@ -48,37 +61,53 @@ void GraphManager::SetupOdometers() {
   // NOTE(tonioteran) this chooses a particular direction for the gravity
   // vector, explained here https://gtsam.org/doxygen/a00698_source.html.
   boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> p =
-      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedD(0.0);
+      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(0.00);
 
-  // Set the desired parameters. TODO(tonioteran): pull out to params yaml.
+  // TODO(tonioteran): pull out to params yaml.
   // This parameters are explained here: https://gtsam.org/doxygen/a03439.html
-  // Numerical numbers taken from:
-  // https://github.com/borglab/gtsam/blob/develop/examples/ImuFactorsExample.cpp
   p->accelerometerCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(0.0003924, 2);
-  p->integrationCovariance = gtsam::Matrix33::Identity(3, 3) * 1e-8;
+      gtsam::Matrix33::Identity(3, 3) * pow(imu_accel_stddev_, 2);
   p->gyroscopeCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(0.000205689024915, 2);
-  p->biasAccCovariance = gtsam::Matrix33::Identity(3, 3) * pow(0.004905, 2);
+      gtsam::Matrix33::Identity(3, 3) * pow(imu_omega_stddev_, 2);
+  p->biasAccCovariance =
+      gtsam::Matrix33::Identity(3, 3) * pow(imu_accel_bias_stddev_, 2);
   p->biasOmegaCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(0.000001454441043, 2);
+      gtsam::Matrix33::Identity(3, 3) * pow(imu_omega_bias_stddev_, 2);
+  p->integrationCovariance = gtsam::Matrix33::Identity(3, 3) * 1e-8;
   p->biasAccOmegaInt = gtsam::Matrix::Identity(6, 6) * 1e-5;
 
   // Instantiate both odometers.
-  odometer_ = std::make_shared<gtsam::PreintegratedCombinedMeasurements>(p);
-  accumulator_ = std::make_shared<gtsam::PreintegratedCombinedMeasurements>(p);
+  odometer_ = std::make_shared<gtsam::PreintegratedCombinedMeasurements>(
+          p, cur_imu_bias_);
+  accumulator_ = std::make_shared<gtsam::PreintegratedCombinedMeasurements>(
+          p, cur_imu_bias_);
 }
 
 void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
-  gtsam::Symbol pose_id = gtsam::Symbol('x', cur_pose_idx_);
+  gtsam::Symbol pose_id = gtsam::Symbol('x', cur_odom_pose_idx_);
+  gtsam::Symbol bias_id = gtsam::Symbol('b', cur_bias_idx_);
+  gtsam::Symbol vel_id = gtsam::Symbol('v', cur_vel_idx_);
+
   // Add prior factor to graph.
   graph_.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(pose_id, pose,
                                                           prior_noise_);
+  // Add prior velocity to graph.
+  //graph_.emplace_shared<gtsam::PriorFactor<gtsam::Vector3>>(vel_id,
+                                                           //cur_vel_estimate_,
+                                                           //vel_noise_);
+  // Add prior IMU bias factor to graph.
+  graph_.emplace_shared<gtsam::PriorFactor<gtsam::imuBias::ConstantBias>>(
+          bias_id, cur_imu_bias_, imu_bias_noise_);
+
   // Add initial estimates.
   initial_estimates_.insert(pose_id, pose);
-  // Save initial pose as our current pose estimate.
+  initial_estimates_.insert(vel_id, cur_vel_estimate_);
+  initial_estimates_.insert(bias_id, cur_imu_bias_);
+  // Save initial pose as our current estimate.
   cur_pose_estimate_ = pose;
   dead_reckoning_ = pose;
+  // Save initial origin for IMU preintegration
+  cur_state_estimate_ = gtsam::NavState(cur_pose_estimate_, cur_vel_estimate_);
   // Toggle flag for factor graph initialization.
   fg_init_ = true;
 }
@@ -86,18 +115,76 @@ void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
 void GraphManager::AddImuMeasurement(const Eigen::Vector3d &accel,
                                      const Eigen::Vector3d &omega,
                                      const double dt) {
+
   // Preintegrate on both the `odometer_` and the `accumulator_`.
   odometer_->integrateMeasurement(accel, omega, dt);
   accumulator_->integrateMeasurement(accel, omega, dt);
 
-  // Probably move these to member variables.
-  gtsam::NavState state_origin{};
-  gtsam::imuBias::ConstantBias bias;
-
   // Generate the dead-reckoned pose estimate.
-  gtsam::NavState dead_reckon = accumulator_->predict(state_origin, bias);
+  gtsam::NavState dead_reckon = accumulator_->predict(cur_state_estimate_, cur_imu_bias_);
   dead_reckoning_ = dead_reckon.pose();
-  std::cout << dead_reckon.t() << std::endl;
+}
+
+void GraphManager::AddImuFactor() {
+    // Adds all the relevant factors and updates the Bayes tree
+    cur_pose_idx_++;
+    gtsam::Key prev_bias = gtsam::Symbol('b', cur_pose_idx_ - 1);
+    gtsam::Key cur_bias = gtsam::Symbol('b', cur_pose_idx_);
+    gtsam::Key prev_pose = gtsam::Symbol('x', cur_pose_idx_ - 1);
+    gtsam::Key cur_pose = gtsam::Symbol('x', cur_pose_idx_);
+    gtsam::Key prev_vel = gtsam::Symbol('v', cur_pose_idx_ - 1);
+    gtsam::Key cur_vel = gtsam::Symbol('v', cur_pose_idx_);
+    // Add IMU factor (already includes bias factor!)
+    gtsam::CombinedImuFactor imu_factor(prev_pose, prev_vel, cur_pose, cur_vel,
+                                        prev_bias, cur_bias, *odometer_);
+    graph_.add(imu_factor);
+
+    // Update state
+    gtsam::NavState predicted_state = odometer_->predict(cur_state_estimate_,
+                                                         cur_imu_bias_);
+    initial_estimates_.insert(cur_pose, predicted_state.pose());
+    initial_estimates_.insert(cur_vel, predicted_state.v());
+    initial_estimates_.insert(cur_bias, cur_imu_bias_);
+}
+
+void GraphManager::AddSonarFactor(gtsam::Pose3 sonar_constraint) {
+    gtsam::Symbol prev_pose = gtsam::Symbol('x', cur_pose_idx_ - 1);
+    gtsam::Symbol cur_pose = gtsam::Symbol('x', cur_pose_idx_);
+    // Add pose constraint computed by sonar bundle adjustment
+    graph_.add(gtsam::BetweenFactor<gtsam::Pose3>(prev_pose, cur_pose,
+                                                  sonar_constraint,
+                                                  prior_noise_));
+}
+
+Eigen::Affine3d GraphManager::UpdateiSAM() {
+    gtsam::Key cur_pose = gtsam::Symbol('x', cur_pose_idx_);
+    gtsam::Key cur_vel = gtsam::Symbol('v', cur_pose_idx_);
+    gtsam::Key cur_bias = gtsam::Symbol('b', cur_pose_idx_);
+    // Update the Bayes tree
+    isam2_.update(graph_, initial_estimates_);
+    gtsam::Values result = isam2_.calculateEstimate();
+    result.print();
+    // Update current state and bias with iSAM2 optimized values
+    cur_state_estimate_ = gtsam::NavState(result.at<gtsam::Pose3>(cur_pose),
+                                          result.at<gtsam::Vector3>(cur_vel));
+    cur_imu_bias_ = result.at<gtsam::imuBias::ConstantBias>(cur_bias);
+
+    // Reset odometer with new bias estimate
+    odometer_->resetIntegrationAndSetBias(cur_imu_bias_);
+    // Reset factor graph
+    graph_ = gtsam::NonlinearFactorGraph();
+    // Reset initial estimates
+    initial_estimates_.clear();
+
+    return Eigen::Affine3d(cur_state_estimate_.pose().matrix());
+}
+
+void GraphManager::PrintFactorGraph() {
+    graph_.print("\n Current Factor Graph:\n");
+}
+
+bool GraphManager::isGraphInit() {
+    return fg_init_;
 }
 
 }  // namespace fsslam

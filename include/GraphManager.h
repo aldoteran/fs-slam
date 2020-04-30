@@ -12,12 +12,14 @@
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/navigation/CombinedImuFactor.h>
+#include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
+#include <vector>
 #include <iostream>
 
 namespace fsslam {
@@ -44,7 +46,24 @@ class GraphManager {
 
   /// Preintegrates an IMU measurement onto the `odometer_` and `accumulator_`.
   void AddImuMeasurement(const Eigen::Vector3d &accel,
-                         const Eigen::Vector3d &omega, const double dt);
+                         const Eigen::Vector3d &omega,
+                         //const gtsam::NavState state_origin,
+                         const double dt);
+  /// Adds IMU factors and updates Bayes tree with iSAM2.
+  void AddFactorsAndUpdateTree();
+  //! Function to add IMU factor to the graph.
+  void AddImuFactor();
+  //! Function to add IMU bias factor to the graph.
+  void AddSonarFactor(gtsam::Pose3 pose);
+  //! Function to update iSAM with the latest factor graph
+  Eigen::Affine3d UpdateiSAM();
+
+  //! Initializes the factor graph with first pose estimate and prior.
+  void InitFactorGraph(const gtsam::Pose3 &pose);
+  //! Print current factor graph
+  void PrintFactorGraph();
+  //! Return Graph status
+  bool isGraphInit();
 
  private:
   //! Initialize the noise models using specified parameters.
@@ -56,10 +75,21 @@ class GraphManager {
   const double prior_pos_stddev_ = 0.01;  // [m], uninformed guess.
   //! Standard deviation parameter for prior's rotation component.
   const double prior_rot_stddev_ = 0.001;  // [rad], uninformed guess.
+  //! TODO(aldoteran): Noise model for the velocity estimates.
+  gtsam::noiseModel::Diagonal::shared_ptr vel_noise_;
+  //! Standard deviation for velocity components
+  const double vel_stddev_ = 0.1;
+  //! Noise model for the IMU measurements
+  gtsam::noiseModel::Diagonal::shared_ptr imu_noise_;
+  gtsam::noiseModel::Diagonal::shared_ptr imu_bias_noise_;
   //! Standard deviation parameter for IMU's acceleration components.
-  const double imu_accel_stddev_ = 0.001;  // [???], uninformed guess.
+  const double imu_accel_stddev_ = 4.0e-3;  // [m/s2], from gazebo.
   //! Standard deviation parameter for IMU's angular velocity components.
-  const double imu_omega_stddev_ = 0.001;  // [???], uninformed guess.
+  const double imu_omega_stddev_ = 3.39369e-4;  // [rad/s], from gazebo.
+  //! Stddev for bias parameter for IMU's acceleration components.
+  const double imu_accel_bias_stddev_ = 6.0e-3; // [m/s2], from gazebo.
+  //! Stddev for bias parameter for IMU's angular velocity components.
+  const double imu_omega_bias_stddev_ = 3.8785e-5; // [rad/s], from gazebo.
 
   //! Setup iSAM's optimization and inference parameters.
   void SetupiSAM();
@@ -70,10 +100,16 @@ class GraphManager {
   gtsam::Values initial_estimates_;
   //! Holds the full system's state estimate (poses + landmarks).
   gtsam::Values cur_sys_estimate_;
+  //! Holds the most recent pose and velocity for IMU preintegration.
+  gtsam::NavState cur_state_estimate_;
   //! Contains the current pose estimate (initially at origin).
   gtsam::Pose3 cur_pose_estimate_ = gtsam::Pose3();
   //! Contains the hitherto dead reckoning pose estimate (initially at origin).
   gtsam::Pose3 dead_reckoning_ = gtsam::Pose3();
+  //! Contains the latest estimate of the velocity.
+  gtsam::Vector3 cur_vel_estimate_ = gtsam::Vector3(0.0, 0.0, 0.0);
+  ////! Contains the latest IMU bias estimate.
+  gtsam::imuBias::ConstantBias cur_imu_bias_;
 
   // IMU related variables and functions.
 
@@ -85,8 +121,6 @@ class GraphManager {
   /// Instantiates odometers with custom properties.
   void SetupOdometers();
 
-  //! Initializes the factor graph with first pose estimate and prior.
-  void InitFactorGraph(const gtsam::Pose3 &pose);
   //! Factor graph for new observations.
   gtsam::NonlinearFactorGraph graph_;
   //! Flag for checking whether the factor graph has been initialized.
@@ -95,6 +129,11 @@ class GraphManager {
   //! Variable for keeping track of the number of poses in the graph. Counter
   //! should be incremented at the beginning of an `AddPose` function.
   int cur_pose_idx_ = 0;
+  int cur_odom_pose_idx_ = 0;
+  int cur_sonar_pose_idx_ = 0;
+  int cur_bias_idx_ = 0;
+  int cur_vel_idx_ = 0;
+
 };
 
 }  // namespace fsslam
