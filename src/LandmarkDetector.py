@@ -9,9 +9,7 @@ import cv2
 import timeit
 import numpy as np
 from cv_bridge import CvBridge
-from sensor_msgs.msg import Image#, PointCloud2
-from visualization_msgs.msg import Marker, MarkerArray
-from BundleAdjuster import BundleAdjuster
+from sensor_msgs.msg import Image
 
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
@@ -44,34 +42,54 @@ class Landmark:
     :type map2: tuple (x,y,z,stamp)
 
     """
-    def __init__(self, keypts1, keypts2, map1, map2, key1, key2, T_Xb, Xb, Xa):
-        self.pixels_img1 = tuple(np.flip(np.round(keypts1[key1].pt).astype(int)))
-        self.pixels_img2 = tuple(np.flip(np.round(keypts2[key2].pt).astype(int)))
-        # ground truth for m_i from img1(X_a) and img2(X_b)
-        self.cart_img1 = np.array([[map1[0][self.pixels_img1]],
-                                   [map1[1][self.pixels_img1]],
-                                   [map1[2][self.pixels_img1]]])
-        self.cart_img2 = np.array([[map2[0][self.pixels_img2]],
-                                   [map2[1][self.pixels_img2]],
-                                   [map1[2][self.pixels_img2]]])
-        # TODO(aldoteran): maybe this can be done better
-        self.is_shit = False
-        if (self.cart_img1 == 0).any() or (self.cart_img2 == 0).any():
-            self.is_shit = True
-        # init elevation and phi to 0
-        self.phi = 0.0
-        self.elevation = 0.0
-        # measurements in polar coordinates
-        self.polar_img1 = self.cart_to_polar(self.cart_img1)
-        self.polar_img2 = self.cart_to_polar(self.cart_img2)
-        # ground truth for phi, for debugging
-        self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
-        # relative pose between img1 and img2 T_Xb
-        self.rel_pose = T_Xb
-        # pose from img2 (Xa)
-        self.Xa = Xa
-        # pose from img2 (Xb)
-        self.Xb = Xb
+    def __init__(self, keypts1=None, keypts2=None, map1=None, map2=None,
+                 key1=None, key2=None, T_Xb=None, Xb=None, Xa=None, test=False):
+
+        if not test:
+            self.pixels_img1 = tuple(np.flip(np.round(keypts1[key1].pt).astype(int)))
+            self.pixels_img2 = tuple(np.flip(np.round(keypts2[key2].pt).astype(int)))
+            # ground truth for m_i from img1(X_a) and img2(X_b)
+            self.cart_img1 = np.array([[map1[0][self.pixels_img1]],
+                                    [map1[1][self.pixels_img1]],
+                                    [map1[2][self.pixels_img1]]])
+            self.cart_img2 = np.array([[map2[0][self.pixels_img2]],
+                                    [map2[1][self.pixels_img2]],
+                                    [map1[2][self.pixels_img2]]])
+            # TODO(aldoteran): maybe this can be done better
+            self.is_shit = False
+            if (self.cart_img1 == 0).any() or (self.cart_img2 == 0).any():
+                self.is_shit = True
+            # init elevation and phi to 0
+            self.phi = 0.0
+            self.elevation = 0.0
+            # measurements in polar coordinates
+            self.polar_img1 = self.cart_to_polar(self.cart_img1)
+            self.polar_img2 = self.cart_to_polar(self.cart_img2)
+            # ground truth for phi, for debugging
+            self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
+            # relative pose between img1 and img2 T_Xb
+            self.rel_pose = T_Xb
+            # pose from img2 (Xa)
+            self.Xa = Xa
+            # pose from img2 (Xb)
+            self.Xb = Xb
+        else:
+            self.cart_img1 = None
+            self.cart_img2 = None
+            self.phi = 0.0
+            self.elevation = 0.0
+            # measurements in polar coordinates
+            self.polar_img1 = None
+            self.polar_img2 = None
+            # ground truth for phi, for debugging
+            self.real_phi = None
+            # relative pose between img1 and img2 T_Xb
+            self.rel_pose = None
+            # pose from img2 (Xa)
+            self.Xa = None
+            # pose from img2 (Xb)
+            self.Xb = None
+
 
     def update_phi(self, phi):
         # Updates phi and elevation attributes (wrt X_a/img1)
@@ -110,15 +128,10 @@ class LandmarkDetector:
     :param features: type of features to detect
     :type features: str
     """
-    # TODO: give options for detection of diff features?
-    feat_dict = {'AKAZE': cv2.AKAZE_create(),
-                 'SIFT': cv2.xfeatures2d.SIFT_create(),
-                 'SURF': cv2.xfeatures2d.SURF_create()}
-                 # 'ORB': cv2.ORB()}
     BUFF_LEN = 4
 
-    def __init__(self, features='AKAZE', verbose=True):
-        self.detector = self.feat_dict[features]
+    def __init__(self, verbose=True):
+        self.detector = cv2.AKAZE_create()
         self.bridge = CvBridge()
         self.is_verbose = verbose
         self.is_init = False
@@ -126,28 +139,26 @@ class LandmarkDetector:
         self.cart_map_buff = []
         self.pcl_buff = []
 
-        #### SUBSCRIPTIONS ####
+        #### SUBSCRIBERS ####
         #TODO(aldoteran): Maybe using a sonar img handler is more modular
         # self.sonar_handler = SimSonarHandler()
-        self.tf_listener = tf.TransformListener()
+        self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
         rospy.Subscriber('/rexrov/depth/image_raw_raw_sonar',
                          Image, self._image_cb)
         rospy.Subscriber('/rexrov/depth/image_raw_depth_raw_sonar',
                          Image, self._range_cb)
-
         #### PUBLISHERS ####
         self.image_pub = rospy.Publisher('/features_debug', Image,
                                          queue_size=1)
-        self.marker_pub = rospy.Publisher('/landmarks', MarkerArray,
-                                          queue_size=1)
         self.tf_pub = tf.TransformBroadcaster()
 
     def _image_cb(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
         img = np.uint8(255 * (img / np.max(img)))
         stamp = msg.header.stamp
+        idx = msg.header.seq
         self.sonar_frame = msg.header.frame_id
-        self.img_buff.append((img,stamp))
+        self.img_buff.append((img,stamp,idx))
         if len(self.img_buff) >= self.BUFF_LEN:
             self.img_buff.pop(0)
 
@@ -203,6 +214,63 @@ class LandmarkDetector:
 
         return [keypts1, keypts2, good_matches]
 
+    def _relative_pose(self, imgs):
+        """
+        Compute the relative pose T_Xb between two frames. Uses the timestamp of each
+        image to look for the TF wrt to the world frame.
+
+        :params imgs: pair of images to extract and match features from
+        :type imgs: list of tuples [(img1,stamp), (img2,stamp)]
+
+        :return: relative pose T_Xb expressed as an homogenous transformation matrix
+        :rtype: np.array (4,4)
+        """
+        # try:
+            # # get poses and compute T_xb from the optimized path.
+            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                # '/slam/sonar_optimized_link',
+                                                                # imgs[0][1])
+            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                # '/slam/sonar_optimized_link',
+                                                                # imgs[1][1])
+        # except:
+            # pass
+        # try:
+            # rospy.logwarn("Using IMU odometry instead of optimized pose.")
+            # # get poses and compute T_xb from the IMU odometry.
+            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                # '/sonar/odom_link',
+                                                                # imgs[1][1])
+            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                # '/sonar/odom_link',
+                                                                # imgs[0][1])
+        # except:
+        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                            '/rexrov/forward_sonar_optical_frame',
+                                                            imgs[1][1])
+        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                            '/rexrov/forward_sonar_optical_frame',
+                                                            imgs[0][1])
+        # self.is_init = True
+
+        Xa = tf.transformations.quaternion_matrix(rot_Xa)
+        Xa[:-1, -1] = np.asarray(trans_Xa)
+        Xb = tf.transformations.quaternion_matrix(rot_Xb)
+        Xb[:-1, -1] = np.asarray(trans_Xb)
+        T_Xb = np.linalg.inv(Xa).dot(Xb)
+
+        # for debugging
+        if self.is_verbose:
+            rot_Xb = np.copy(T_Xb)
+            rot_Xb[0:-1,-1] = 0.0
+            self.tf_pub.sendTransform((T_Xb[0,-1], T_Xb[1,-1], T_Xb[2,-1]),
+                                    tf.transformations.quaternion_from_matrix(rot_Xb),
+                                    imgs[1][1],
+                                    "/Xb",
+                                    "/rexrov/forward_sonar_optical_frame")
+
+        return (T_Xb, Xb, Xa)
+
     def generate_landmarks(self, imgs, features, maps):
         """
         Generates a list of Landmark instances and updates each
@@ -224,198 +292,14 @@ class LandmarkDetector:
                                    match[0].queryIdx, match[0].trainIdx,
                                    T_Xb, Xb, Xa)
                           for match in features[2]]
-
-        #TODO(aldoteran): import from config file
-        # VFOV from the depth camera in gazebo is 63 deg, res=0.5deg
-        phi_range = np.arange(-0.54977, 0.54977, 0.017453)
-        sigma = np.float32(np.diag((0.01, 0.01)))
-
+        # TODO(aldoteran): use real outlier detection
         inliers = []
-        # TODO(aldoteran): fix this shit
         for i,l in enumerate(self.landmarks):
             if l.is_shit:
                 continue
-            # phi_star = self._opt_phi_search(l, T_Xb, sigma, phi_range, imgs)
-            # l.update_phi(phi_star)
             inliers.append(i)
         # get rid of poorly contrained landmarks
         self.landmarks = np.asarray(self.landmarks)[inliers].tolist()
 
-        # for debugging, publish landmark markers
-        # if self.is_verbose:
-            # landmarkers = MarkerArray()
-            # for i,l in enumerate(self.landmarks):
-                # # Green ground truth markers
-                # landmarkers.markers.append(self._create_marker(l,i, imgs))
-                # # Red estimated markers
-                # landmarkers.markers.append(self._create_marker_est(l,i+len(self.landmarks), imgs))
-            # self.marker_pub.publish(landmarkers)
-
         return self.landmarks
-
-    def _relative_pose(self, imgs):
-        """
-        Compute the relative pose T_Xb between two frames. Uses the timestamp of each
-        image to look for the TF wrt to the world frame.
-
-        :params imgs: pair of images to extract and match features from
-        :type imgs: list of tuples [(img1,stamp), (img2,stamp)]
-
-        :return: relative pose T_Xb expressed as an homogenous transformation matrix
-        :rtype: np.array (4,4)
-        """
-        try:
-            # get poses and compute T_xb from the optimized path.
-            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                '/slam/sonar_optimized_link',
-                                                                imgs[0][-1])
-            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                '/slam/sonar_optimized_link',
-                                                                imgs[1][-1])
-        except:
-            rospy.logwarn("Using IMU odometry instead of optimized pose.")
-            # get poses and compute T_xb from the IMU odometry.
-            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                '/sonar/odom_link',
-                                                                imgs[0][-1])
-            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                '/sonar/odom_link',
-                                                                imgs[1][-1])
-            self.is_init = True
-
-        Xa = tf.transformations.quaternion_matrix(rot_Xa)
-        Xa[:-1, -1] = np.asarray(trans_Xa)
-        Xb = tf.transformations.quaternion_matrix(rot_Xb)
-        Xb[:-1, -1] = np.asarray(trans_Xb)
-        T_Xb = np.linalg.inv(Xa).dot(Xb)
-
-        # for debugging
-        if self.is_verbose:
-            rot_Xb = np.copy(T_Xb)
-            rot_Xb[0:-1,-1] = 0.0
-            self.tf_pub.sendTransform((T_Xb[0,-1], T_Xb[1,-1], T_Xb[2,-1]),
-                                    tf.transformations.quaternion_from_matrix(rot_Xb),
-                                    imgs[1][-1],
-                                    "/Xb",
-                                    "/rexrov/forward_sonar_optical_frame")
-
-        return (T_Xb, Xb, Xa)
-
-    def _opt_phi_search(self, landmark, T_Xb, sigma, phi_range, imgs):
-        """
-        Search for optimal phi using the list of phis in phi_range.
-        """
-        rot_Xb = T_Xb[:-1,:-1]
-        trans_Xb = T_Xb[:-1,-1:]
-
-        best_phi = 1.0
-        old_error = 9999
-        z_b = landmark.polar_img2
-        for phi in phi_range:
-            q_i = rot_Xb.transpose().dot(landmark.project_coords(phi) - trans_Xb)
-            innov = landmark.cart_to_polar(q_i) - z_b
-            error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
-            if error < old_error:
-                best_phi = phi
-                old_error = error
-
-        return best_phi
-        # return landmark.real_phi
-
-    def _create_marker(self, landmark, idx, imgs):
-        # create markers to display in rviz for debugging
-        marker = Marker()
-        marker.header.stamp = imgs[0][1]
-        # marker.header.frame_id = '/Xb'
-        marker.header.frame_id = '/rexrov/forward_sonar_optical_frame'
-        marker.ns = 'landmark'
-        marker.id = idx
-        marker.type = marker.SPHERE
-        marker.action = marker.ADD
-        marker.scale.x = 0.2
-        marker.scale.y = 0.2
-        marker.scale.z = 0.2
-        marker.color.g = 1.0
-        marker.color.a = 1.0
-        marker.lifetime = rospy.Duration(0.5)
-        marker.pose.position.x = landmark.cart_img1[1,0]
-        marker.pose.position.y = landmark.cart_img1[2,0]
-        marker.pose.position.z = landmark.cart_img1[0,0]
-
-        return marker
-
-    def _create_marker_proj(self, idx, cart, imgs):
-        # create markers to display in rviz for debugging
-        marker = Marker()
-        marker.header.stamp = imgs[0][1]
-        # marker.header.frame_id = '/Xb'
-        marker.header.frame_id = '/Xb'
-        marker.ns = 'landmark'
-        marker.id = idx
-        marker.type = marker.SPHERE
-        marker.action = marker.ADD
-        marker.scale.x = 0.2
-        marker.scale.y = 0.2
-        marker.scale.z = 0.2
-        marker.color.b = 1.0
-        marker.color.a = 1.0
-        marker.lifetime = rospy.Duration(0.5)
-        marker.pose.position.x = cart[1,0]
-        marker.pose.position.y = cart[2,0]
-        marker.pose.position.z = cart[0,0]
-
-        return marker
-
-    def _create_marker_est(self, landmark, idx, imgs):
-        # create markers to display in rviz for debugging
-        marker = Marker()
-        marker.header.stamp = imgs[0][1]
-        marker.header.frame_id = '/Xb'
-        marker.ns = 'landmark'
-        marker.id = idx
-        marker.type = marker.SPHERE
-        marker.action = marker.ADD
-        marker.scale.x = 0.2
-        marker.scale.y = 0.2
-        marker.scale.z = 0.2
-        marker.color.r = 1.0
-        marker.color.a = 1.0
-        marker.lifetime = rospy.Duration(0.5)
-        marker.pose.position.x = landmark.cart_img2[1,0]
-        marker.pose.position.y = landmark.elevation
-        # marker.pose.position.y = landmark.cart_img2[2,0]
-        marker.pose.position.z = landmark.cart_img2[0,0]
-
-        return marker
-
-def main():
-    rospy.init_node('feature_extraction')
-    detector = LandmarkDetector(features='AKAZE')
-    bundler = BundleAdjuster()
-    rospy.sleep(2)
-    # initialize with two first images
-    if len(detector.img_buff) >= 2:
-        img1 = detector.img_buff.pop(0)
-        img2 = detector.img_buff.pop(0)
-        maps_img1 = detector.cart_map_buff.pop(0)
-        maps_img2 = detector.cart_map_buff.pop(0)
-        features = detector.extact_n_match([img1, img2])
-        landmarks = detector.generate_landmarks([img1, img2], features,
-                                                [maps_img1, maps_img2])
-        bundler.compute_constraint(landmarks)
-    while not rospy.is_shutdown():
-        if len(detector.img_buff) >= 1 & len(detector.cart_map_buff) >=1:
-            # drop only first image
-            img1 = img2
-            img2 = detector.img_buff.pop(0)
-            #TODO(aldoteran): assert stamps correspond btwn img and map
-            maps_img1 = maps_img2
-            maps_img2 = detector.cart_map_buff.pop(0)
-            features = detector.extact_n_match([img1, img2])
-            landmarks = detector.generate_landmarks([img1, img2], features,
-                                                    [maps_img1, maps_img2])
-            bundler.compute_constraint(landmarks)
-
-if __name__ == '__main__':
-    main()
 

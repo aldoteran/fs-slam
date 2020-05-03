@@ -4,12 +4,12 @@ Class to handle the Two-View Bundle Adjustment algorithm
 explained in the paper "Degeneracy-Aware Imaging Sonar
 Simultaneous Localization and Mapping" by Westman and Kaess.
 """
-import rospy
-import tf
-import timeit
 import numpy as np
+from scipy.linalg import ldl, sqrtm
+
+import tf
+import rospy
 from nav_msgs.msg import Odometry
-# from LandmarkDetector import LandmarkDetector
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from geometry_msgs.msg import PoseWithCovariance, PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
@@ -23,12 +23,13 @@ class BundleAdjuster:
     """
     TBA
     """
-    def __init__(self, verbose=True):
-
+    def __init__(self, verbose=True, test=False):
+        self.is_test = test
+        self.verbose = verbose
         self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
-                                        PoseWithCovarianceStamped,
+                                        PoseStamped,
                                         queue_size=1)
         self.pose_constraint_pub = rospy.Publisher('/bundle_adjustment/sonar_constraint',
                                                    PoseStamped,
@@ -49,60 +50,87 @@ class BundleAdjuster:
 
         :return:
         """
-        tic = timeit.timeit()
-
         N = len(landmarks)
         epsilon = 1e-6
-        #TODO: better covariance?
-        sqrt_sigma = np.linalg.inv(np.sqrt(np.diag((0.01,0.01))))
+        #TODO: import from config
+        sqrt_sigma = np.linalg.inv(sqrtm(np.diag((0.01,0.01))))
         # init with best info up until this point
         T_Xb = landmarks[0].rel_pose
         Xb = landmarks[0].Xb
         Xa = landmarks[0].Xa
-        # x_init = self._init_state(landmarks, Xb, N)
-        x_init, z_a, z_b = self._init_paper_state(landmarks, Xb, N)
+        x_init, z_a, z_b = self._init_state(landmarks, Xb, N)
         delta_old = np.zeros(x_init.shape)
         error_old = 9e6
-
         # Gauss-Newton NLS optimization
-        for it in range(5):
-            # (1) Get relative pose btwn Xa and optimized pose Xb
-            if it > 0:
-                # T_Xb = self._update_transform(Xa, x_init)
-                T_Xb = self._update_paper_transform(Xa, x_init)
-
-            # (2) Direct search for phi_star
+        for it in range(10):
+            # (1) Direct search for phi_star
             phis = self._opt_phi_search(x_init, z_b, T_Xb, sigma, N)
             # ground truth, for debugging
             # phis = [l.real_phi for l in landmarks]
-
-            # (3) Compute whitened Jacobian A and error vector b
-            # A = self._get_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
-            A = self._get_paper_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
-            # b = self._whitened_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
-            b = self._paper_whitened_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
-
-            # (4) SVD of A and thresholding of singular values
+            # (2) Compute whitened Jacobian A and error vector b
+            A = self._get_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
+            b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
+            # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            S[S < 3.0] = 0.0
+            # S[S < 1.0] = 0.0
 
-            # (5) Update initial state
-            delta_new = V.dot(np.linalg.pinv(np.diag(S))).dot(U.transpose()).dot(b)
+            # (4) Update initial state
+            A_d = U.dot(np.diag(S)).dot(V.transpose())
+            delta_new = V.dot(np.linalg.pinv(np.diag(S), True)) \
+                         .dot(U.transpose()).dot(b)
             x_new = x_init + delta_new
             error = np.linalg.norm(delta_new - delta_old)
-            rospy.logwarn("Update error for iter {}: {}".format(it, error))
-            if error_old < error:
+            # (5) Check if converged
+            if self.verbose:
+                rospy.logwarn("Update error for iter {}: {}".format(it, error))
+            if error < epsilon:
                 break
+            # (6) Update values and iterate
             delta_old = np.copy(delta_new)
             error_old = error
             x_init = np.copy(x_new)
+            T_Xb = self._update_transform(Xa, x_init)
+            rospy.logwarn("Resulting relative pose: {}".format(T_Xb))
 
-        toc = timeit.timeit()
-        rospy.logwarn("Gauss-Newton executed in {} seconds".format(toc - tic))
-        # self._publish_pose(x_new, sigma)
-        self._publish_paper_pose(x_new, sigma)
+        # Return the sate if in test mode
+        if self.is_test:
+            return (x_new, T_Xb, phis, S, error)
+
+        sqrt_info = self._get_sqrt_information(A_d)
+        self._publish_pose(x_new, sigma)
         self._publish_pose_constraint(T_Xb)
         self._publish_true_odom(Xb)
+
+    def _init_state(self, landmarks, Xb, N):
+        """
+        Initialize state.
+
+        :param landmarks: list of landmarks
+        :type landmarks: list [Landmark_1,...,Landmark_N]
+
+        :param T_Xb: relative pose btwn pose Xa and Xb represented by a
+                     4 by 4 rigid transformation matrix
+        :type T_Xb: np.array (4,4)
+
+        :return: initial state vector
+        :rtype: np.array (6+2*N, 1)
+        """
+        x = np.zeros((6+2*N, 1))
+        z_a = np.zeros((2*N, 1))
+        z_b = np.copy(z_a)
+        # X Y Z R P Y? or X Y Z Y P R?
+        quat = tf.transformations.quaternion_from_matrix(Xb)
+        euler = tf.transformations.euler_from_quaternion(quat)
+        x[0:6,0:1] = np.array([[Xb[0,-1]],[Xb[1,-1]],[Xb[2,-1]],
+                             [euler[2]],[euler[1]],[euler[0]]])
+        i = 0
+        for l in landmarks:
+            x[6+i:6+i+2,:] = l.polar_img1
+            z_a[i:i+2,:] = l.polar_img1
+            z_b[i:i+2,:] = l.polar_img2
+            i += 2
+
+        return (x, z_a, z_b)
 
     def _opt_phi_search(self, x, z_b, T_Xb, sigma, N):
         """
@@ -127,7 +155,6 @@ class BundleAdjuster:
             phis.append(best_phi)
 
         return phis
-        # return landmark.real_phi
 
     def _project_coords(self, polar, phi):
         """
@@ -149,7 +176,7 @@ class BundleAdjuster:
                          [r * np.sin(theta) * np.cos(phi)],
                          [r * np.sin(phi)]])
 
-    def _update_paper_transform(self, Xa, x):
+    def _update_transform(self, Xa, x):
         """
         Update T_Xb
         """
@@ -161,21 +188,10 @@ class BundleAdjuster:
 
         return np.linalg.inv(Xa).dot(Xb)
 
-    def _update_transform(self, Xa, x):
-        """
-        Update T_Xb
-        """
-        Xb = np.array([[x[0,0], x[3,0], x[6,0], x[9,0]],
-                       [x[1,0], x[4,0], x[7,0], x[10,0]],
-                       [x[2,0], x[5,0], x[8,0], x[11,0]],
-                       [0., 0., 0., 1.]])
-
-        return np.linalg.inv(Xa).dot(Xb)
-
     def _predict_hb(self, T_Xb, cart):
         return T_Xb[:-1,:-1].transpose().dot(cart - T_Xb[:-1, -1:])
 
-    def _get_paper_jacobians(self, x, T_Xb, phis, sqrt_sigma, N):
+    def _get_jacobians(self, x, T_Xb, phis, sqrt_sigma, N):
         """
         Jacobians from the paper
         """
@@ -210,46 +226,7 @@ class BundleAdjuster:
 
         return np.vstack((H_A, H_B))
 
-    def _get_jacobians(self, x, T_Xb, phis, sqrt_sigma, N):
-        """
-        TODO
-        """
-        rot = T_Xb[:-1, :-1]
-        tx = T_Xb[0,-1]
-        ty = T_Xb[1,-1]
-        tz = T_Xb[2,-1]
-        H_A = np.hstack((np.zeros((2*N,12)), np.eye(2*N,2*N)))
-
-        H_B = np.zeros((2*N, 12+2*N))
-        for j,i in enumerate(range(0,N,2)):
-            polar = np.array([[x[12+i,0]],
-                              [x[12+i+1,0]],
-                              [phis[j]]])
-            p = self.polar_to_cart(polar)
-            q = self._predict_hb(T_Xb, p)
-
-            zhat_q = np.array([[-q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2),
-                                q[0,0]/np.sqrt(q[0,0]**2+q[1,0]**2), 0.0],
-                            [q[0,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
-                                q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
-                                q[2,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2)]])
-            q_xb = np.array([[q[0,0]-tx, q[1,0]-ty, q[2,0]-tz,0.,0.,0.,0.,0.,0.],
-                            [0.,0.,0., q[0,0]-tx, q[1,0]-ty, q[2,0]-tz,0.,0.,0.],
-                            [0.,0.,0.,0.,0.,0., q[0,0]-tx, q[1,0]-ty, q[2,0]-tz]])
-            H_B[i:i+2,0:12] = zhat_q.dot(np.hstack((q_xb, -rot)))
-
-            q_p = rot.transpose()
-            p_mi = np.array([[-polar[1,0]*np.sin(polar[0,0])*np.cos(polar[2,0]),
-                              np.cos(polar[0,0])*np.cos(polar[2,0])],
-                            [polar[1,0]*np.cos(polar[0,0])*np.cos(polar[2,0]),
-                             np.sin(polar[0,0])*np.cos(polar[2,0])],
-                            [0.0, np.sin(polar[2,0])]])
-            H_B[i:i+2,12+2*i:14+2*i] = zhat_q.dot(q_p).dot(p_mi)
-
-        return np.tile(sqrt_sigma,(2*N,1)).dot(np.vstack((H_A, H_B)))
-
-
-    def _whitened_b(self, x, T_Xb, phis, z_a, z_b, sqrt_sigma, N):
+    def _get_error_b(self, x, T_Xb, phis, z_a, z_b, sqrt_sigma, N):
         """
         TODO
 
@@ -258,25 +235,6 @@ class BundleAdjuster:
 
         :return: predicted range-bearing measurement of landmark from Xa to Xb
         :rtype: np.array (2,1) [theta, range]
-        """
-        b_a = np.zeros((x.shape[0]-12, 1))
-        b_b = np.copy(b_a)
-        rot_Xb = T_Xb[:-1, :-1]
-        trans_Xb = T_Xb[:-1, -1:]
-
-        for j,i in enumerate(range(0,N*2,2)):
-            polar = np.array([[x[12+i,0]],
-                              [x[12+i+1,0]],
-                              [phis[j]]])
-            b_a[i:i+2,:] = sqrt_sigma.dot(z_a[i:i+2,:] - polar[0:2,:])
-            q_i = rot_Xb.transpose().dot(self.polar_to_cart(polar) - trans_Xb)
-            b_b[i:i+2,:] = sqrt_sigma.dot(z_b[i:i+2,:] - self.cart_to_polar(q_i))
-
-        return np.vstack((b_a, b_b))
-
-    def _paper_whitened_b(self, x, T_Xb, phis, z_a, z_b, sqrt_sigma, N):
-        """
-        TODO
         """
         b_a = np.zeros((x.shape[0]-6, 1))
         b_b = np.copy(b_a)
@@ -293,103 +251,27 @@ class BundleAdjuster:
 
         return np.vstack((b_a, b_b))
 
-    def _init_paper_state(self, landmarks, Xb, N):
-
-        x = np.zeros((6+2*N, 1))
-        z_a = np.zeros((2*N, 1))
-        z_b = np.copy(z_a)
-        # X Y Z R P Y? or X Y Z Y P R?
-        quat = tf.transformations.quaternion_from_matrix(Xb)
-        euler = tf.transformations.euler_from_quaternion(quat)
-        x[0:6,0:1] = np.array([[Xb[0,-1]],[Xb[1,-1]],[Xb[2,-1]],
-                             [euler[2]],[euler[1]],[euler[0]]])
-        i = 0
-        for l in landmarks:
-            x[6+i:6+i+2,:] = l.polar_img1
-            z_a[i:i+2,:] = l.polar_img1
-            z_b[i:i+2,:] = l.polar_img2
-            i += 2
-        # land_est = np.asarray([l.polar_img1 for l in landmarks])
-        # x[6:,:] = np.reshape(land_est, (land_est.shape[0]*land_est.shape[1],1))
-
-        return (x, z_a, z_b)
-
-    def _init_state(self, landmarks, Xb, N):
+    def _get_sqrt_information(self, A_d):
         """
-        Initialize state.
+        Computes the sqrt information matrix as in section V-C in
+        the paper.
 
-        :param landmarks: list of landmarks
-        :type landmarks: list [Landmark_1,...,Landmark_N]
+        :param A_d: SV thresholded A matrix
+        :type A_d: np.array (6+2N, 6+2N)
 
-        :param T_Xb: relative pose btwn pose Xa and Xb represented by a
-                     4 by 4 rigid transformation matrix
-        :type T_Xb: np.array (4,4)
-
-        :return: initial state vector
-        :rtype: np.array (12+2*N, 1)
+        :return: Square root information matrix R
+        :rtype: np.array (6,6)
         """
-        x = np.zeros((12+2*N, 1))
-        x[0:12,0] = Xb[0:-1,:].flatten(order='F')
-        land_est = np.asarray([l.polar_img1 for l in landmarks])
-        x[12:,:] = np.reshape(land_est, (land_est.shape[0]*land_est.shape[1],1))
+        Gamma = A_d.transpose().dot(A_d)
+        Gamma_11 = Gamma[0:6,0:6]
+        Gamma_12 = Gamma[0:6,6:]
+        Gamma_21 = Gamma[6:,0:6]
+        Gamma_22 = Gamma[6:,6:]
+        Lambda = Gamma_11 - Gamma_12.dot(np.linalg.inv(Gamma_22)).dot(Gamma_21)
+        L, D, P = ldl(Lambda, lower=True)
+        sqrt_inf = sqrtm(D).transpose().dot(L[P,:].transpose())
 
-        return x
-
-    def _publish_pose(self, x, sigma):
-        """
-        Publish the sonar pose constraint using output from the optimization
-
-        :param x: optimal state resulting from the GN optimization
-        :type x: np.array (12+2*N,1)
-        """
-        rot_Xb = np.array([[x[0,0], x[3,0], x[6,0], 0.],
-                           [x[1,0], x[4,0], x[7,0], 0.],
-                           [x[2,0], x[5,0], x[8,0], 0.],
-                           [0., 0., 0., 1.]])
-        trans_Xb = np.array([[x[9,0]],
-                             [x[10,0]],
-                             [x[11,0]]])
-        quat = self.normalize_quat(tf.transformations.quaternion_from_matrix(rot_Xb))
-
-        #TODO(aldoteran): might have to change axis bc of camera frame convention
-        sonar_pose = PoseWithCovarianceStamped()
-        sonar_pose.header.frame_id = "/sonar_estimate"
-        sonar_pose.header.stamp = rospy.Time.now()
-        sonar_pose.pose.pose.position.x = trans_Xb[0,0]
-        sonar_pose.pose.pose.position.y = trans_Xb[1,0]
-        sonar_pose.pose.pose.position.z = trans_Xb[2,0]
-        sonar_pose.pose.pose.orientation.x = quat[0]
-        sonar_pose.pose.pose.orientation.y = quat[1]
-        sonar_pose.pose.pose.orientation.z = quat[2]
-        sonar_pose.pose.pose.orientation.w = quat[3]
-        # publish tf for debugging
-        self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
-        # self.tf_pub.sendTransform((trans_Xb[0,0], 0, trans_Xb[2,0]),
-                                  quat, rospy.Time.now(),
-                                  # self._normalize_quat([0,quat[1],0,quat[3]]),
-                                  # rospy.Time.now(),
-                                  "/sonar_estimate",
-                                  "/world")
-        self.pose_pub.publish(sonar_pose)
-
-        ########
-        # ODOM #
-        ########
-
-        sonar_pose = PoseWithCovariance()
-        sonar_pose.pose.position.x = trans_Xb[0,0]
-        sonar_pose.pose.position.y = trans_Xb[1,0]
-        sonar_pose.pose.position.z = trans_Xb[2,0]
-        sonar_pose.pose.orientation.x = quat[0]
-        sonar_pose.pose.orientation.y = quat[1]
-        sonar_pose.pose.orientation.z = quat[2]
-        sonar_pose.pose.orientation.w = quat[3]
-        sonar_odom = Odometry()
-        sonar_odom.header.frame_id = "/world"
-        sonar_odom.child_frame_id = "/sonar_estimate"
-        sonar_odom.header.stamp = rospy.Time.now()
-        sonar_odom.pose = sonar_pose
-        self.odom_pub.publish(sonar_odom)
+        return sqrt_inf
 
     def _publish_pose_constraint(self, T_Xb):
         """
@@ -402,7 +284,7 @@ class BundleAdjuster:
         trans_Xb = T_Xb[:-1,-1:]
         quat = tf.transformations.quaternion_from_matrix(T_Xb)
         quat = self.normalize_quat(quat)
-
+        # Publish pose
         sonar_constraint = PoseStamped()
         sonar_constraint.header.frame_id = "/sonar_pose_constraint"
         sonar_constraint.header.stamp = rospy.Time.now()
@@ -415,7 +297,7 @@ class BundleAdjuster:
         sonar_constraint.pose.orientation.w = quat[3]
         self.pose_constraint_pub.publish(sonar_constraint)
 
-    def _publish_paper_pose(self, x, sigma):
+    def _publish_pose(self, x, sigma):
         """
         TODO
         """
@@ -426,32 +308,24 @@ class BundleAdjuster:
                                                         x[4,0],
                                                         x[3,0])
         quat = self.normalize_quat(quat)
-
-        ########
-        # POSE #
-        ########
-
-        sonar_pose = PoseWithCovarianceStamped()
+        # Publish pose
+        sonar_pose = PoseStamped()
         sonar_pose.header.frame_id = "/sonar_estimate"
         sonar_pose.header.stamp = rospy.Time.now()
-        sonar_pose.pose.pose.position.x = trans_Xb[0,0]
-        sonar_pose.pose.pose.position.y = trans_Xb[1,0]
-        sonar_pose.pose.pose.position.z = trans_Xb[2,0]
-        sonar_pose.pose.pose.orientation.x = quat[0]
-        sonar_pose.pose.pose.orientation.y = quat[1]
-        sonar_pose.pose.pose.orientation.z = quat[2]
-        sonar_pose.pose.pose.orientation.w = quat[3]
+        sonar_pose.pose.position.x = trans_Xb[0,0]
+        sonar_pose.pose.position.y = trans_Xb[1,0]
+        sonar_pose.pose.position.z = trans_Xb[2,0]
+        sonar_pose.pose.orientation.x = quat[0]
+        sonar_pose.pose.orientation.y = quat[1]
+        sonar_pose.pose.orientation.z = quat[2]
+        sonar_pose.pose.orientation.w = quat[3]
         # publish tf for debugging
         self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
                                   quat, rospy.Time.now(),
                                   "/sonar_estimate",
                                   "/world")
         self.pose_pub.publish(sonar_pose)
-
-        ########
-        # ODOM #
-        ########
-
+        # Publish odometry
         sonar_pose = PoseWithCovariance()
         sonar_pose.pose.position.x = trans_Xb[0,0]
         sonar_pose.pose.position.y = trans_Xb[1,0]
@@ -468,12 +342,9 @@ class BundleAdjuster:
         self.odom_pub.publish(sonar_odom)
 
     def _publish_true_odom(self, Xb):
-        """
-        TODO
-        """
         quat = tf.transformations.quaternion_from_matrix(Xb)
         trans_Xb = Xb[:-1,-1:]
-
+        # Publish odometry
         sonar_pose = PoseWithCovariance()
         sonar_pose.pose.position.x = trans_Xb[0,0]
         sonar_pose.pose.position.y = trans_Xb[1,0]

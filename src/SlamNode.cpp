@@ -72,13 +72,13 @@ void SlamNode::InitGraphManager() {
 }
 
 void SlamNode::InitState() {
-  ros::Duration(3.0).sleep(); // wait for TF buffer to build up
+  ros::Duration(1.0).sleep(); // wait for TF buffer to build up
   tf::StampedTransform transform;
   ros::Time now = ros::Time::now();
   try {
       // Get current TF of the sonar wrt the world
       tf_listener_.waitForTransform(map_frame_id_, imu_frame_id_,
-                                    now, ros::Duration(3.0));
+                                    now, ros::Duration(5.0));
       tf_listener_.lookupTransform(map_frame_id_, imu_frame_id_,
                                    now, transform);
       tf::transformTFToEigen(transform, origin_);
@@ -111,6 +111,7 @@ void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
 
 void SlamNode::SonarImgCallback(const sensor_msgs::Image &msg) {
     if(gm_->isGraphInit()) {
+        node_count_++;
         // Add IMU odometry pose constraint
         ROS_WARN("Adding new pose to graph.");
         gm_->AddImuFactor();
@@ -129,7 +130,10 @@ void SlamNode::SonarPoseCallback(
                                 msg.pose.orientation.z,
                                 msg.pose.orientation.w};
         ROS_WARN("Adding sonar pose constraint to graph.");
+        std::cout << "Rotation:" << rotation.matrix() << std::endl;
+        std::cout << "Translation:" << position << std::endl;
         gm_->AddSonarFactor(gtsam::Pose3(rotation, position));
+
         // Update iSAM and get optimized pose
         Eigen::Affine3d opt_pose = gm_->UpdateiSAM();
         // Publish the pose
