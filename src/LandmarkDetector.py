@@ -128,7 +128,7 @@ class LandmarkDetector:
     :param features: type of features to detect
     :type features: str
     """
-    BUFF_LEN = 4
+    BUFF_LEN = 20
 
     def __init__(self, verbose=True):
         self.detector = cv2.AKAZE_create()
@@ -225,32 +225,27 @@ class LandmarkDetector:
         :return: relative pose T_Xb expressed as an homogenous transformation matrix
         :rtype: np.array (4,4)
         """
-        # try:
-            # # get poses and compute T_xb from the optimized path.
-            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                # '/slam/sonar_optimized_link',
-                                                                # imgs[0][1])
-            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                # '/slam/sonar_optimized_link',
-                                                                # imgs[1][1])
-        # except:
-            # pass
-        # try:
-            # rospy.logwarn("Using IMU odometry instead of optimized pose.")
-            # # get poses and compute T_xb from the IMU odometry.
-            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                # '/sonar/odom_link',
-                                                                # imgs[1][1])
-            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                # '/sonar/odom_link',
-                                                                # imgs[0][1])
-        # except:
-        trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                            '/rexrov/forward_sonar_optical_frame',
-                                                            imgs[1][1])
-        trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                            '/rexrov/forward_sonar_optical_frame',
-                                                            imgs[0][1])
+        try:
+            # get poses and compute T_xb from the optimized path.
+            # self.tf_listener.waitForTransform('/world', '/slam/sonar_optimized_link',
+                                            # imgs[1][-1], rospy.Duration(2.0))
+            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                '/slam/sonar_optimized_link',
+                                                                imgs[0][1])
+            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                '/slam/sonar_optimized_link',
+                                                                imgs[1][1])
+        except:
+            rospy.logwarn("Using IMU odometry instead of optimized pose.")
+            # get poses and compute T_xb from the IMU odometry.
+            # self.tf_listener.waitForTransform('/world', '/sonar/odom_link',
+                                              # imgs[1][1], rospy.Duration(5.0))
+            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                'imu/odom',
+                                                                imgs[1][1])
+            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                'imu/odom',
+                                                                imgs[0][1])
         # self.is_init = True
 
         Xa = tf.transformations.quaternion_matrix(rot_Xa)

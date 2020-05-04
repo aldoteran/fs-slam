@@ -181,8 +181,8 @@ class BundleAdjuster:
         Update T_Xb
         """
         trans = np.array([[x[0,0]],[x[1,0]],[x[2,0]]])
+        # Y P R in state
         quat = tf.transformations.quaternion_from_euler(x[5,0], x[4,0], x[3,0])
-        # quat = tf.transformations.quaternion_from_euler(x[3,0], x[4,0], x[5,0], axes='szyx')
         Xb = tf.transformations.quaternion_matrix(quat)
         Xb[:-1,-1:] = trans
 

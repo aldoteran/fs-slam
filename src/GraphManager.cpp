@@ -62,8 +62,7 @@ void GraphManager::SetupNoiseModels() {
 
 void GraphManager::SetupiSAM() {
   gtsam::ISAM2Params params;
-  // TODO(tonioteran) using default parameters for the moment. If we want to
-  // configure later on, we need to add the desired params to the ctor.
+  params.relinearizeTreshold = 0.1;
   isam2_ = gtsam::ISAM2(params);
 }
 
@@ -71,7 +70,7 @@ void GraphManager::SetupOdometers() {
   // NOTE(tonioteran) this chooses a particular direction for the gravity
   // vector, explained here https://gtsam.org/doxygen/a00698_source.html.
   boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> p =
-      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(0.00);
+      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedD(0.00);
 
   // TODO(tonioteran): pull out to params yaml.
   // This parameters are explained here: https://gtsam.org/doxygen/a03439.html
@@ -94,10 +93,10 @@ void GraphManager::SetupOdometers() {
 }
 
 void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
-  gtsam::Symbol pose_id = gtsam::Symbol('x', cur_odom_pose_idx_);
-  gtsam::Symbol bias_id = gtsam::Symbol('b', cur_bias_idx_);
-  gtsam::Symbol vel_id = gtsam::Symbol('v', cur_vel_idx_);
-  gtsam::Symbol sonar_id = gtsam::Symbol('s', cur_pose_idx_);
+  gtsam::Symbol pose_id = gtsam::Symbol('x', 0);
+  gtsam::Symbol bias_id = gtsam::Symbol('b', 0);
+  gtsam::Symbol vel_id = gtsam::Symbol('v', 0);
+  gtsam::Symbol sonar_id = gtsam::Symbol('s', 0);
 
   //gtsam::Pose3 pose;
   gtsam::Pose3 sonar_init_pose = pose * sonar_extrinsics_;
@@ -198,11 +197,8 @@ Eigen::Affine3d GraphManager::UpdateiSAM() {
     std::cout << "Factor Graph:" << std::endl;
     graph_.print();
 
-    gtsam::LevenbergMarquardtOptimizer optimizer(graph_, initial_estimates_);
-    gtsam::Values result = optimizer.optimize();
-
-    //isam2_.update(graph_, initial_estimates_);
-    //gtsam::Values result = isam2_.calculateEstimate();
+    isam2_.update(graph_, initial_estimates_);
+    gtsam::Values result = isam2_.calculateEstimate();
     // Update current state and bias with iSAM2 optimized values
     cur_state_estimate_ = gtsam::NavState(result.at<gtsam::Pose3>(cur_pose),
                                           result.at<gtsam::Vector3>(cur_vel));
@@ -213,9 +209,9 @@ Eigen::Affine3d GraphManager::UpdateiSAM() {
     // Reset odometer with new bias estimate
     odometer_->resetIntegrationAndSetBias(cur_imu_bias_);
     // Reset factor graph
-    //graph_ = gtsam::NonlinearFactorGraph();
+    graph_ = gtsam::NonlinearFactorGraph();
     // Reset initial estimates
-    //initial_estimates_.clear();
+    initial_estimates_.clear();
 
     return Eigen::Affine3d(cur_state_estimate_.pose().matrix());
 }
