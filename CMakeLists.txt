@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 
 # This works for me using a system-wide GTSAM and Eigen installation.
 find_package(GTSAM REQUIRED)
-find_package(Eigen3 3.3 REQUIRED)
+#find_package(Eigen3 3 REQUIRED)
+find_package(PkgConfig)
+pkg_search_module(Eigen3 REQUIRED eigen3)
+
 
 find_package(catkin REQUIRED
   roscpp
@@ -13,6 +16,7 @@ find_package(catkin REQUIRED
   tf2
   tf2_geometry_msgs
   eigen_conversions
+  tf_conversions
   std_msgs
   geometry_msgs
   nav_msgs

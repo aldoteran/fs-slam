@@ -50,6 +50,10 @@ class SlamNode {
   void PublishDeadReckonPath();
   /// Publish optimized path.
   void PublishOptimizedPath(Eigen::Affine3d pose);
+  /// Publish the true path from gazebo.
+  void PublishTruePath();
+  /// Used for debugging, publishes the sonar TF to the optimized path.
+  void PublishSonarTF();
 
   // Utilities. TODO(tonioteran) Should move to external file.
   geometry_msgs::PoseStamped TransformToPose(const Eigen::Affine3d &tfm);
@@ -78,7 +82,7 @@ class SlamNode {
   //! Subscriber for the IMU information.
   ros::Subscriber imu_meas_sub_;
   //! Topic in which the IMU measurements are being received.
-  std::string imu_meas_topic_ = "/imu/data";
+  std::string imu_meas_topic_ = "/rexrov/imu";
   //! Callback for the IMU measurements subscriber.
   void ImuMeasCallback(const sensor_msgs::Imu &msg);
 
@@ -94,7 +98,7 @@ class SlamNode {
   //! Topic in which the sonar poses are being received.
   std::string sonar_pose_topic_ = "/bundle_adjustment/sonar_constraint";
   //! Callback for the sonar image subscriber.
-  void SonarPoseCallback(const geometry_msgs::PoseStamped &msg);
+  void SonarPoseCallback(const geometry_msgs::PoseWithCovarianceStamped &msg);
 
   //! Initial state
   Eigen::Affine3d origin_;
@@ -103,7 +107,7 @@ class SlamNode {
   ros::Publisher dead_reckoning_pub_;
   nav_msgs::Path dead_reckoning_path_;
   //! Default name for static SLAM trajectory path.
-  std::string dead_reckoning_topic_ = "/slam/dead_reckoning_path";
+  std::string dead_reckoning_topic_ = "/slam/dead_reckoning/path";
   //! Default name for frame in which the static SLAM path is expressed.
   std::string dead_reckoning_frame_id_ = "world";
   //
@@ -111,15 +115,23 @@ class SlamNode {
   ros::Publisher optimized_pose_pub_;
   nav_msgs::Path optimized_pose_path_;
   //! Default name for static SLAM trajectory path.
-  std::string optimized_pose_topic_ = "/slam/optimized_pose_path";
+  std::string optimized_pose_topic_ = "/slam/optimized/path";
   //! Default name for frame in which the static SLAM path is expressed.
   std::string optimized_pose_frame_id_ = "world";
+
+  //! Publisher for true base path.
+  ros::Publisher true_pose_pub_;
+  nav_msgs::Path true_path_;
+  //! Default name for static SLAM trajectory path.
+  std::string true_pose_topic_ = "/slam/true/path";
+  //! Default name for frame in which the static SLAM path is expressed.
+  std::string true_pose_frame_id_ = "world";
 
   //! Publisher for SLAM dead reckoning odom.
   ros::Publisher dead_reckoning_odom_pub_;
   nav_msgs::Odometry dead_reckoning_odom_;
   //! Default name for static SLAM trajectory path.
-  std::string dead_reckoning_odom_topic_ = "/slam/dead_reckoning_odom";
+  std::string dead_reckoning_odom_topic_ = "/slam/dead_reckoning/odom";
 
   //! Standard deviation parameter for prior's translation component [m].
   double prior_pos_stddev_;
@@ -135,6 +147,9 @@ class SlamNode {
 
   //! Factor graph manager for SAM and inference.
   std::unique_ptr<GraphManager> gm_ = nullptr;
+
+  //! Counter for the nodes in the Factor Graphs
+  int node_count_ = 0;
 };
 
 }  // namespace fsslam

@@ -15,13 +15,13 @@ prior_pos_stddev: 0.0001
 prior_rot_stddev: 0.000001
 # --IMU measurements:
 # Standard deviation for the linear acceleration measurements [???].
-imu_accel_stddev: 0.001
+imu_accel_stddev: 5.0e-4
 # Standard deviation for the angular velocity measurements [???].
-imu_omega_stddev: 0.001
+imu_omega_stddev: 9.6962e-6
 # Measurement frequency [Hz].
 imu_frequency: 50.0
 
 
 # SLAM estimate publishers.
-dead_reckoning_topic: /slam/dead_reckoning
+dead_reckoning_topic: /slam/dead_reckoning/path
 dead_reckoning_frame_id: world

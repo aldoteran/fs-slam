@@ -15,12 +15,18 @@
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
 #include <vector>
 #include <iostream>
+
+using gtsam::symbol_shorthand::X;
+using gtsam::symbol_shorthand::V;
+using gtsam::symbol_shorthand::B;
+using gtsam::symbol_shorthand::S;
 
 namespace fsslam {
 
@@ -44,26 +50,38 @@ class GraphManager {
     return Eigen::Affine3d(dead_reckoning_.matrix());
   }
 
+  /// Predict the current IMU pose using the corrected IMU measurements.
+  inline const Eigen::Affine3d GetImuOdom() const {
+    return Eigen::Affine3d(odometry_.matrix());
+  }
+
+  /// Return the sonar eextrinsics (for debugging)
+  inline const Eigen::Affine3d GetSonarExtrinsics() const {
+    return Eigen::Affine3d(sonar_extrinsics_.matrix());
+  }
+
+  //! Print current factor graph
+  inline void PrintFactorGraph() {
+      graph_.print("\n Current Factor Graph:\n");
+  }
+
+  //! Return Graph status
+  inline bool isGraphInit() {
+      return fg_init_;
+  }
+
   /// Preintegrates an IMU measurement onto the `odometer_` and `accumulator_`.
   void AddImuMeasurement(const Eigen::Vector3d &accel,
                          const Eigen::Vector3d &omega,
-                         //const gtsam::NavState state_origin,
                          const double dt);
   /// Adds IMU factors and updates Bayes tree with iSAM2.
-  void AddFactorsAndUpdateTree();
-  //! Function to add IMU factor to the graph.
-  void AddImuFactor();
-  //! Function to add IMU bias factor to the graph.
-  void AddSonarFactor(gtsam::Pose3 pose);
-  //! Function to update iSAM with the latest factor graph
-  Eigen::Affine3d UpdateiSAM();
+  Eigen::Affine3d AddFactors(gtsam::Pose3 sonar_constraint,
+                             gtsam::Matrix66 R);
 
   //! Initializes the factor graph with first pose estimate and prior.
   void InitFactorGraph(const gtsam::Pose3 &pose);
-  //! Print current factor graph
-  void PrintFactorGraph();
-  //! Return Graph status
-  bool isGraphInit();
+  //! Initial pose in the world frame when starting
+  gtsam::NavState initial_state_;
 
  private:
   //! Initialize the noise models using specified parameters.
@@ -75,21 +93,35 @@ class GraphManager {
   const double prior_pos_stddev_ = 0.01;  // [m], uninformed guess.
   //! Standard deviation parameter for prior's rotation component.
   const double prior_rot_stddev_ = 0.001;  // [rad], uninformed guess.
+  // TODO(aldoteran): This must be computed as in section V-C of the paper.
+  //! Noise model for the two view sonar factor's measurement information. Standard
+  //! deviation values with units [m], [m], [m], [rad], [rad], [rad].
+  gtsam::noiseModel::Diagonal::shared_ptr sonar_noise_;
+  gtsam::noiseModel::Gaussian::shared_ptr sonar_covariance_;
+  //! Standard deviation parameter for sonar's translation component.
+  const double sonar_pos_stddev_ = 0.0001;  // [m], uninformed guess.
+  //! Standard deviation parameter for sonars's rotation component.
+  const double sonar_rot_stddev_ = 0.0001;  // [rad], uninformed guess.
+  //! Very small noise for the sonar extrinsics
+  gtsam::noiseModel::Diagonal::shared_ptr sonar_extrinsics_noise_;
+  const double sonar_ex_pos_stddev_ = 1e-5;
+  const double sonar_ex_rot_stddev_ = 1e-5;
+
   //! TODO(aldoteran): Noise model for the velocity estimates.
   gtsam::noiseModel::Diagonal::shared_ptr vel_noise_;
   //! Standard deviation for velocity components
-  const double vel_stddev_ = 0.1;
+  const double vel_stddev_ = 1.0;
   //! Noise model for the IMU measurements
   gtsam::noiseModel::Diagonal::shared_ptr imu_noise_;
   gtsam::noiseModel::Diagonal::shared_ptr imu_bias_noise_;
   //! Standard deviation parameter for IMU's acceleration components.
-  const double imu_accel_stddev_ = 4.0e-3;  // [m/s2], from gazebo.
+  const double imu_accel_stddev_ = 5.0e-4;  // [m/s2], from gazebo.
   //! Standard deviation parameter for IMU's angular velocity components.
-  const double imu_omega_stddev_ = 3.39369e-4;  // [rad/s], from gazebo.
+  const double imu_omega_stddev_ = 9.6962e-6;  // [rad/s], from gazebo.
   //! Stddev for bias parameter for IMU's acceleration components.
-  const double imu_accel_bias_stddev_ = 6.0e-3; // [m/s2], from gazebo.
+  const double imu_accel_bias_stddev_ = 1e-8; // [m/s2], from gazebo.
   //! Stddev for bias parameter for IMU's angular velocity components.
-  const double imu_omega_bias_stddev_ = 3.8785e-5; // [rad/s], from gazebo.
+  const double imu_omega_bias_stddev_ = 1e-8; // [rad/s], from gazebo.
 
   //! Setup iSAM's optimization and inference parameters.
   void SetupiSAM();
@@ -106,12 +138,28 @@ class GraphManager {
   gtsam::Pose3 cur_pose_estimate_ = gtsam::Pose3();
   //! Contains the hitherto dead reckoning pose estimate (initially at origin).
   gtsam::Pose3 dead_reckoning_ = gtsam::Pose3();
+  //! Contains the hitherto IMU odometry pose estimate (initially at origin).
+  gtsam::Pose3 odometry_ = gtsam::Pose3();
   //! Contains the latest estimate of the velocity.
   gtsam::Vector3 cur_vel_estimate_ = gtsam::Vector3(0.0, 0.0, 0.0);
   ////! Contains the latest IMU bias estimate.
   gtsam::imuBias::ConstantBias cur_imu_bias_;
 
-  // IMU related variables and functions.
+  //! Sonar extrinsics base (imu) link to sonar optical frame.
+  gtsam::Point3 sonar_trans = gtsam::Point3(1.3, 0.0, -0.7);
+  // no pitch
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(0.5, -0.5, 0.5, -0.5);
+  // 10 deg pitch
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(0.38371743, -0.59393681, 0.59393681,
+                                      //-0.38371743);
+  // 20 deg pitch
+  gtsam::Rot3 sonar_rot = gtsam::Rot3(0.38371743, -0.59393681, 0.59393681,
+                                      -0.38371743);
+  // 45 deg pitch
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.27059805, -0.65328148, 0.65328148, 0.27059805);
+  // 90 deg pitch
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(4.3297e-17, -0.707106, 0.707106, -4.3297e-17);
+  gtsam::Pose3 sonar_extrinsics_ = gtsam::Pose3(sonar_rot, sonar_trans);
 
   /// Odometer for IMU preintegration between keyframes.
   std::shared_ptr<gtsam::PreintegratedCombinedMeasurements> odometer_ = nullptr;
@@ -133,6 +181,7 @@ class GraphManager {
   int cur_sonar_pose_idx_ = 0;
   int cur_bias_idx_ = 0;
   int cur_vel_idx_ = 0;
+  int cur_frame_ = 0;
 
 };
 
