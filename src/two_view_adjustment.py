@@ -19,32 +19,34 @@ is_verbose = rospy.get_param("verbose")
 def main():
     rospy.init_node('two_view_sonar_adjustment')
     detector = LandmarkDetector(verbose=is_verbose)
+    rospy.sleep(2.0)
     adjuster = BundleAdjuster(verbose=is_verbose)
     rospy.loginfo("Initializing Two-View sonar bundle adjustment.")
-    rospy.sleep(1.0)
+    rospy.sleep(2.0)
     # initialize with two images first
     if len(detector.img_buff) >= 2:
         img1 = detector.img_buff.pop(0)
         img2 = detector.img_buff.pop(0)
         maps_img1 = detector.cart_map_buff.pop(0)
         maps_img2 = detector.cart_map_buff.pop(0)
-        features = detector.extact_n_match([img1, img2])
-        landmarks = detector.generate_landmarks([img1, img2], features,
-                                                [maps_img1, maps_img2])
-        adjuster.compute_constraint(landmarks)
+        features = detector.extract_n_match([img1, img2])
+        if not features == None:
+            landmarks = detector.generate_landmarks([img1, img2], features,
+                                                    [maps_img1, maps_img2])
+            adjuster.compute_constraint(landmarks)
     while not rospy.is_shutdown():
         tic = time.time()
         if len(detector.img_buff) >= 1 & len(detector.cart_map_buff) >=1:
             # drop only first image
             img1 = img2
             img2 = detector.img_buff.pop(0)
-            #TODO(aldoteran): assert stamps correspond btwn img and map
             maps_img1 = maps_img2
             maps_img2 = detector.cart_map_buff.pop(0)
-            features = detector.extact_n_match([img1, img2])
-            landmarks = detector.generate_landmarks([img1, img2], features,
-                                                    [maps_img1, maps_img2])
-            adjuster.compute_constraint(landmarks)
+            features = detector.extract_n_match([img1, img2])
+            if not features == None:
+                landmarks = detector.generate_landmarks([img1, img2], features,
+                                                        [maps_img1, maps_img2])
+                adjuster.compute_constraint(landmarks)
             toc = time.time()
             rospy.loginfo("Computed constraint in {} seconds".format(toc-tic))
 

@@ -48,10 +48,7 @@ void SlamNode::SetupRos() {
   // Subscribe to the IMU sensor measurements.
   imu_meas_sub_ =
       nh_.subscribe(imu_meas_topic_, 1000, &SlamNode::ImuMeasCallback, this);
-  // Subscribe to the IMU sensor measurements.
-  sonar_img_sub_ =
-      nh_.subscribe(sonar_img_topic_, 1000, &SlamNode::SonarImgCallback, this);
-  // Subscribe to the sonar bundle adjustment constraint topic
+  // Subscribe to the sonar bundle adjustment pose constraint topic
   sonar_pose_sub_ =
       nh_.subscribe(sonar_pose_topic_, 1000, &SlamNode::SonarPoseCallback, this);
 
@@ -63,6 +60,10 @@ void SlamNode::SetupRos() {
   optimized_pose_pub_ =
       nh_.advertise<nav_msgs::Path>(optimized_pose_topic_, 1000);
   optimized_pose_path_.header.frame_id = optimized_pose_frame_id_;
+  // Setup the static SLAM path publisher for the true trajectory.
+  true_pose_pub_ =
+      nh_.advertise<nav_msgs::Path>(true_pose_topic_, 1000);
+  true_path_.header.frame_id = true_pose_frame_id_;
 
 }
 
@@ -76,68 +77,73 @@ void SlamNode::InitState() {
   tf::StampedTransform transform;
   ros::Time now = ros::Time::now();
   try {
-      // Get current TF of the sonar wrt the world
-      tf_listener_.waitForTransform(map_frame_id_, imu_frame_id_,
-                                    now, ros::Duration(5.0));
-      tf_listener_.lookupTransform(map_frame_id_, imu_frame_id_,
-                                   now, transform);
-      tf::transformTFToEigen(transform, origin_);
+    // Get current TF of the sonar wrt the world
+    tf_listener_.waitForTransform(map_frame_id_, imu_frame_id_,
+                                now, ros::Duration(5.0));
+    tf_listener_.lookupTransform(map_frame_id_, imu_frame_id_,
+                                now, transform);
+    tf::transformTFToEigen(transform, origin_);
 
-      ROS_WARN("Found TF for origin.");
-      std::cout << origin_.matrix() << std::endl;
+    ROS_INFO("Found TF for origin.");
+    std::cout << origin_.matrix() << std::endl;
 
-      ROS_WARN("Initializing Factor Graph with origin.");
-      gtsam::Rot3 rot{origin_.rotation().matrix()};
-      gtsam::Point3 trans{origin_.translation()};
-      gtsam::Pose3 state_origin(rot, trans);
-      gm_->InitFactorGraph(state_origin);
+    ROS_INFO("Initializing Factor Graph with found origin.");
+    gtsam::Rot3 rot{origin_.rotation().matrix()};
+    gtsam::Point3 trans{origin_.translation()};
+    gtsam::Pose3 state_origin(rot, trans);
+    gm_->InitFactorGraph(state_origin);
+    // Publish first optimized pose and TF
+    PublishOptimizedPath(Eigen::Affine3d(state_origin.matrix()));
   }
   catch (tf::TransformException ex) {
     ROS_ERROR("%s", ex.what());
     ROS_WARN("TF for origin not found, defaulting to zero.");
+    gm_->InitFactorGraph(gtsam::Pose3());
+    // Publish first optimized pose and TF
+    PublishOptimizedPath(Eigen::Affine3d());
   }
 }
 
 void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
   Eigen::Vector3d accel = {msg.linear_acceleration.x, msg.linear_acceleration.y,
-                           msg.linear_acceleration.y};
+                           msg.linear_acceleration.z};
   Eigen::Vector3d omega = {msg.angular_velocity.x, msg.angular_velocity.y,
-                           msg.angular_velocity.y};
+                           msg.angular_velocity.z};
 
   gm_->AddImuMeasurement(accel, omega, imu_dt_);
 
   PublishDeadReckonPath();
 }
 
-void SlamNode::SonarImgCallback(const sensor_msgs::Image &msg) {
-    if(gm_->isGraphInit()) {
-        node_count_++;
-        // Add IMU odometry pose constraint
-        ROS_WARN("Adding new pose to graph.");
-        gm_->AddImuFactor();
-    }
-}
-
 void SlamNode::SonarPoseCallback(
-        const geometry_msgs::PoseStamped &msg) {
+        const geometry_msgs::PoseWithCovarianceStamped &msg) {
     if(gm_->isGraphInit()) {
         // Add Sonar pose constraint
-        gtsam::Point3 position(msg.pose.position.x,
-                               msg.pose.position.y,
-                               msg.pose.position.z);
-        gtsam::Rot3 rotation = {msg.pose.orientation.x,
-                                msg.pose.orientation.y,
-                                msg.pose.orientation.z,
-                                msg.pose.orientation.w};
+        gtsam::Point3 position(msg.pose.pose.position.x,
+                               msg.pose.pose.position.y,
+                               msg.pose.pose.position.z);
+        gtsam::Rot3 rotation(msg.pose.pose.orientation.w,
+                                msg.pose.pose.orientation.x,
+                                msg.pose.pose.orientation.y,
+                                msg.pose.pose.orientation.z);
+        auto cov = msg.pose.covariance;
+        gtsam::Matrix66 covariance;
+        covariance << cov[0], cov[1], cov[2], cov[3], cov[4], cov[5],
+                      cov[6], cov[7], cov[8], cov[9], cov[10], cov[11],
+                      cov[12], cov[13], cov[14], cov[15], cov[16], cov[17],
+                      cov[18], cov[19], cov[20], cov[21], cov[22], cov[23],
+                      cov[24], cov[25], cov[26], cov[27], cov[28], cov[29],
+                      cov[30], cov[31], cov[32], cov[33], cov[34], cov[35];
         ROS_WARN("Adding sonar pose constraint to graph.");
         std::cout << "Rotation:" << rotation.matrix() << std::endl;
         std::cout << "Translation:" << position << std::endl;
-        gm_->AddSonarFactor(gtsam::Pose3(rotation, position));
-
         // Update iSAM and get optimized pose
-        Eigen::Affine3d opt_pose = gm_->UpdateiSAM();
+        Eigen::Affine3d opt_pose = gm_->AddFactors(
+                gtsam::Pose3(rotation, position), covariance);
         // Publish the pose
         PublishOptimizedPath(opt_pose);
+        PublishSonarTF();
+        PublishTruePath();
     }
 }
 
@@ -159,22 +165,49 @@ void SlamNode::PublishOptimizedPath(Eigen::Affine3d pose) {
     tf::Transform transform;
     tf::poseEigenToTF(pose, transform);
     br_.sendTransform(tf::StampedTransform(transform, ros::Time::now(),
-                      optimized_pose_frame_id_, "slam/sonar_optimized_link"));
+                      optimized_pose_frame_id_, "slam/optimized/base_pose"));
 }
 
 void SlamNode::PublishDeadReckonPath() {
-  // Update our path with the latest pose.
-  Eigen::Affine3d pose = gm_->GetDeadReckoning();
-  geometry_msgs::PoseStamped pose_msg = TransformToPose(pose);
-  pose_msg.header.frame_id = dead_reckoning_frame_id_;
-  dead_reckoning_path_.poses.push_back(pose_msg);
-  // Publish updated path onto topic.
-  dead_reckoning_pub_.publish(dead_reckoning_path_);
-  // Publish the updated pose on the TF server
-  tf::Transform transform_;
-  tf::poseEigenToTF(pose, transform_);
-  br_.sendTransform(tf::StampedTransform(transform_, ros::Time::now(),
-                    dead_reckoning_frame_id_, "imu/odom"));
+    // Update our path with the latest pose.
+    Eigen::Affine3d pose = gm_->GetDeadReckoning();
+    geometry_msgs::PoseStamped pose_msg = TransformToPose(pose);
+    pose_msg.header.frame_id = dead_reckoning_frame_id_;
+    dead_reckoning_path_.poses.push_back(pose_msg);
+    // Publish updated path onto topic.
+    dead_reckoning_pub_.publish(dead_reckoning_path_);
+    // Publish the updated pose on the TF server
+    tf::Transform transform_;
+    tf::poseEigenToTF(pose, transform_);
+    br_.sendTransform(tf::StampedTransform(transform_, ros::Time::now(),
+                    dead_reckoning_frame_id_, "/slam/dead_reckoning/base_pose"));
+}
+
+void SlamNode::PublishTruePath() {
+    tf::StampedTransform transform;
+    ros::Time now = ros::Time::now();
+    Eigen::Affine3d pose;
+    // get TF from world to base link
+    tf_listener_.waitForTransform(map_frame_id_, imu_frame_id_,
+                                now, ros::Duration(5.0));
+    tf_listener_.lookupTransform(map_frame_id_, "rexrov/base_link",
+                                now, transform);
+    tf::transformTFToEigen(transform, pose);
+    geometry_msgs::PoseStamped pose_msg = TransformToPose(pose);
+    // Publish path
+    pose_msg.header.frame_id = true_pose_frame_id_;
+    true_path_.poses.push_back(pose_msg);
+    // Publish updated path onto topic.
+    true_pose_pub_.publish(true_path_);
+}
+
+void SlamNode::PublishSonarTF() {
+    Eigen::Affine3d pose = gm_->GetSonarExtrinsics();
+    // Publish the TF of the sonar
+    tf::Transform transform;
+    tf::poseEigenToTF(pose, transform);
+    br_.sendTransform(tf::StampedTransform(transform, ros::Time::now(),
+                      "slam/optimized/base_pose", "slam/optimized/sonar_pose"));
 }
 
 }  // namespace fsslam
