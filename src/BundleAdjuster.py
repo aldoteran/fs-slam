@@ -16,6 +16,9 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from geometry_msgs.msg import PoseWithCovariance, PoseStamped
 from sensor_msgs.msg import PointCloud2
 
+# for debugging
+import test_utils as utils
+
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
 __author_email__ = "aldot@kth.se, teran@mit.edu"
@@ -36,7 +39,7 @@ class BundleAdjuster:
         self.iters = iters
         self.target_condition = condition
         # TODO(aldoteran): add this to the config file
-        self.phi_range = np.arange(0.54977, -0.54977, -0.017453)
+        self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         self.pointcloud = [[],[],[]]
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -55,9 +58,9 @@ class BundleAdjuster:
                                        PointCloud2,
                                        queue_size=1)
         self.tf_pub = tf.TransformBroadcaster()
-        self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
+        # self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
 
-    def compute_constraint(self, landmarks, sigma=np.diag((0.005,0.005))):
+    def compute_constraint(self, landmarks, theta_stddev=0.05, range_stddev=0.05):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -67,51 +70,58 @@ class BundleAdjuster:
 
         :return:
         """
-        N = len(landmarks)
-        epsilon = 0.1
         #TODO: import from config
+        sigma = np.diag((theta_stddev**2, range_stddev**2))
+        # Compute these only once
+        inv_sigma = np.linalg.inv(sigma)
         sqrt_sigma = np.linalg.inv(sqrtm(sigma))
+
         # init with best info up until this point
-        T_Xb = landmarks[0].rel_pose
-        # for debugging
-        if self.is_debug:
-            covariance = np.eye(6) * 0.008**2
-            self._publish_pose_constraint(T_Xb, covariance)
-            return
+        N = len(landmarks)
         Xb = landmarks[0].Xb
         Xa = landmarks[0].Xa
+        T_Xb = np.linalg.inv(Xa).dot(Xb)
         x_init, z_a, z_b = self._init_state(landmarks, Xb, T_Xb, N)
+
         #for debugging
         delta_norm_vector = []
-        phis, phi_proj_x, phi_proj_y, phi_proj_z = self._opt_phi_search(x_init,
-                                                                        z_b,
-                                                                        T_Xb,
-                                                                        sigma, N)
+        phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx = self._opt_phi_search(x_init,
+                                                                                  z_b,
+                                                                                  T_Xb,
+                                                                                  sigma, N,
+                                                                                  landmarks)
+        # phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
+        # phis = [l.real_phi for l in landmarks]
+
+        # for debugging
+        fig, ax = utils.init_plot(x_init, landmarks, phis, phi_proj_x,
+                                  phi_proj_y, phi_proj_z, Xa, Xb, best_idx)
+
+        # Stop condition
+        epsilon = 0.001
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
-            # (1) Direct search for phi_star
-            # ground truth, for debugging
-            # phis = [l.real_phi for l in landmarks]
-
             # (2) Compute whitened Jacobian A and error vector b
             A = self._get_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
             b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
 
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            # condition_num_diff = [abs(S[0]/s - self.target_condition) for s in S]
-            # S[np.argmin(condition_num_diff) + 1:] = 0.0
             S[S<50] = 0.0
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
             delta = np.linalg.pinv(A_d).dot(b)
             delta_norm = np.linalg.norm(delta)
+
             #for debugging
             delta_norm_vector.append(delta_norm)
             x_init += delta
             T_Xb = self._update_transform(Xa, x_init)
+
+            # for debugging
+            utils.plot_pose(fig, ax, T_Xb)
 
             # (5) Check if converged
             if self.verbose:
@@ -127,10 +137,11 @@ class BundleAdjuster:
         if self.is_test:
             return (x_init, T_Xb, phis, S, delta_norm_vector,
                     phi_proj_x, phi_proj_y, phi_proj_z,
-                    covariance)
+                    covariance, best_idx)
         # Publish everything
-        rospy.loginfo("Resulting relative pose:\n{}".format(T_Xb))
-        rospy.loginfo("Resulting covariance matrix:\n{}".format(covariance))
+        if self.verbose:
+            rospy.loginfo("Resulting relative pose:\n{}".format(T_Xb))
+            rospy.loginfo("Resulting covariance matrix:\n{}".format(covariance))
         self._publish_pose_constraint(T_Xb, covariance)
         self._publish_pose(x_init, sigma, covariance)
         self._publish_true_odom(Xb)
@@ -158,6 +169,7 @@ class BundleAdjuster:
         euler = tf.transformations.euler_from_quaternion(quat)
         x[0:6,0:1] = np.array([[T_Xb[0,-1]],[T_Xb[1,-1]],[T_Xb[2,-1]],
                              [euler[2]],[euler[1]],[euler[0]]])
+                             # [euler[0]],[euler[1]],[euler[2]]])
         i = 0
         for l in landmarks:
             x[6+i:6+i+2,:] = l.polar_img1
@@ -167,7 +179,7 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, sigma, N):
+    def _opt_phi_search(self, x, z_b, T_Xb, sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -185,7 +197,17 @@ class BundleAdjuster:
             old_error = 9999
             z_bi = z_b[i:i+2,:]
             polar = x[6+i:6+i+2,:]
+            # debugging
+            rep_error = []
+            p_x = []
+            p_y = []
+            p_z = []
             for phi in self.phi_range:
+                # debugging
+                p_i = self._project_coords(polar, phi)
+                p_x.append(p_i[0,0])
+                p_y.append(p_i[1,0])
+                p_z.append(p_i[2,0])
                 q_i = rot_Xb.transpose().dot(self._project_coords(polar, phi) - trans_Xb)
                 # for debugging
                 phi_proj_x.append(q_i[0,0])
@@ -193,14 +215,18 @@ class BundleAdjuster:
                 phi_proj_z.append(q_i[2,0])
                 innov = self.cart_to_polar(q_i) - z_bi
                 error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
+                # for debugging
+                rep_error.append(error[0,0])
                 if error < old_error:
                     best_phi = phi
                     old_error = error
+                    # for debugging
+                    best_idx = i/2
             phis.append(best_phi)
 
         # return phis
         #for debugging
-        return (phis, phi_proj_x, phi_proj_y, phi_proj_z)
+        return (phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx)
 
     def _project_coords(self, polar, phi):
         """
@@ -229,12 +255,10 @@ class BundleAdjuster:
         trans = np.array([[x[0,0]],[x[1,0]],[x[2,0]]])
         # Y P R in state
         quat = tf.transformations.quaternion_from_euler(x[5,0], x[4,0], x[3,0])
+        # quat = tf.transformations.quaternion_from_euler(x[3,0], x[4,0], x[5,0])
         T_Xb = tf.transformations.quaternion_matrix(quat)
         T_Xb[:-1,-1:] = trans
-        # Xb = tf.transformations.quaternion_matrix(quat)
-        # Xb[:-1,-1:] = trans
 
-        # return np.linalg.inv(Xa).dot(Xb)
         return T_Xb
 
     def _predict_hb(self, T_Xb, cart):
@@ -249,7 +273,6 @@ class BundleAdjuster:
         info_range = sqrt_sigma[1,1]
         diag = [info_range if i%2==0 else info_theta for i in range(1,2*N+1,1)]
 
-        # H_A = np.hstack((np.zeros((2*N,6)), np.eye(2*N,2*N)))
         H_A = np.hstack((np.zeros((2*N,6)), np.diag(diag)))
 
         H_B = np.zeros((2*N, 6+2*N))
@@ -324,15 +347,15 @@ class BundleAdjuster:
         Gamma_12 = Gamma[0:6,6:]
         Gamma_21 = Gamma[6:,0:6]
         Gamma_22 = Gamma[6:,6:]
-        Lambda = Gamma_11 - Gamma_12.dot(np.linalg.inv(Gamma_22)).dot(Gamma_21)
-        # L, D, P = ldl(Lambda, lower=False)
-        # sqrt_inf = sqrtm(D[P,:]).transpose().dot(L[P,:].transpose())
         try:
+            Lambda = Gamma_11 - Gamma_12.dot(np.linalg.inv(Gamma_22)).dot(Gamma_21)
             covariance = np.linalg.inv(Lambda)
         except np.linalg.LinAlgError:
             rospy.logerr("Singular matrix encountered when computing covariance, skipping...")
             self.is_singular = True
             return None
+        # L, D, P = ldl(Lambda, lower=False)
+        # sqrt_inf = sqrtm(D[P,:]).transpose().dot(L[P,:].transpose())
 
         return covariance
 
@@ -378,6 +401,9 @@ class BundleAdjuster:
         quat = tf.transformations.quaternion_from_euler(x[5,0],
                                                         x[4,0],
                                                         x[3,0])
+        # quat = tf.transformations.quaternion_from_euler(x[3,0],
+                                                        # x[4,0],
+                                                        # x[5,0])
         quat = self.normalize_quat(quat)
         # Publish pose
         sonar_pose = PoseStamped()
@@ -440,12 +466,6 @@ class BundleAdjuster:
         :param state: Optimized state
         :type state: np.array (6+2N,1)
         """
-        # Get TF from sonar frame to world frame
-        # trans, rot = self.tf_listener.lookupTransform('/world',
-                                                      # '/rexrov/forward_sonar_optical_frame',
-                                                      # rospy.Time(0))
-        # R = tf.transformations.quaternion_matrix(rot)
-        # R[:-1, -1] = np.asarray(trans)
         p = [1,2,0]
         pointcloud = [[], [], []]
         # Append points to cloud
@@ -454,7 +474,6 @@ class BundleAdjuster:
                                                 [state[i+1,0]],
                                                 [phis[j]]]))
             cart = cart[p]
-            # cart = R.dot(np.vstack((cart, np.ones((1,1)))))
             pointcloud[0].append(cart[0])
             pointcloud[1].append(cart[1])
             pointcloud[2].append(cart[2])

@@ -115,13 +115,13 @@ class GraphManager {
   gtsam::noiseModel::Diagonal::shared_ptr imu_noise_;
   gtsam::noiseModel::Diagonal::shared_ptr imu_bias_noise_;
   //! Standard deviation parameter for IMU's acceleration components.
-  const double imu_accel_stddev_ = 5.0e-4;  // [m/s2], from gazebo.
+  const double imu_accel_stddev_ = 4e-3;  // [m/s2], from gazebo.
   //! Standard deviation parameter for IMU's angular velocity components.
-  const double imu_omega_stddev_ = 9.6962e-6;  // [rad/s], from gazebo.
+  const double imu_omega_stddev_ = 3.39e-4;  // [rad/s], from gazebo.
   //! Stddev for bias parameter for IMU's acceleration components.
-  const double imu_accel_bias_stddev_ = 1e-8; // [m/s2], from gazebo.
+  const double imu_accel_bias_stddev_ = 6e-3; // [m/s2], from gazebo.
   //! Stddev for bias parameter for IMU's angular velocity components.
-  const double imu_omega_bias_stddev_ = 1e-8; // [rad/s], from gazebo.
+  const double imu_omega_bias_stddev_ = 3.87e-5; // [rad/s], from gazebo.
 
   //! Setup iSAM's optimization and inference parameters.
   void SetupiSAM();
@@ -146,19 +146,10 @@ class GraphManager {
   gtsam::imuBias::ConstantBias cur_imu_bias_;
 
   //! Sonar extrinsics base (imu) link to sonar optical frame.
+  // TODO(aldoteran): move this to config file
   gtsam::Point3 sonar_trans = gtsam::Point3(1.3, 0.0, -0.7);
-  // no pitch
-  //gtsam::Rot3 sonar_rot = gtsam::Rot3(0.5, -0.5, 0.5, -0.5);
-  // 10 deg pitch
-  //gtsam::Rot3 sonar_rot = gtsam::Rot3(0.38371743, -0.59393681, 0.59393681,
-                                      //-0.38371743);
-  // 20 deg pitch
-  gtsam::Rot3 sonar_rot = gtsam::Rot3(0.38371743, -0.59393681, 0.59393681,
-                                      -0.38371743);
-  // 45 deg pitch
-  //gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.27059805, -0.65328148, 0.65328148, 0.27059805);
-  // 90 deg pitch
-  //gtsam::Rot3 sonar_rot = gtsam::Rot3(4.3297e-17, -0.707106, 0.707106, -4.3297e-17);
+  gtsam::Rot3 sonar_rot = gtsam::Rot3(0.000778532, 0.977653929,
+                                      0.0001674033,-0.210219314);
   gtsam::Pose3 sonar_extrinsics_ = gtsam::Pose3(sonar_rot, sonar_trans);
 
   /// Odometer for IMU preintegration between keyframes.

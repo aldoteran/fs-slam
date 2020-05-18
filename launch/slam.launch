@@ -2,11 +2,16 @@
   ## Set as true when running rosbags ##
   <param name="/use_sim_time" value="true"/>
 
+  <!--args="1.3 0 -0.7 -1.57 0 -1.99-->
   ## Static trasform of the sonar optical frame (from gazebo) ##
   <node pkg="tf" type="static_transform_publisher" name="dead_reckoning_to_sonar"
-      args="1.3 0 -0.7 -1.57 0 -1.99
+      args="1.3 0 -0.7 0 0.4235987 3.14
             /slam/dead_reckoning/base_pose
             /slam/dead_reckoning/sonar_pose 10"/>
+  <node pkg="tf" type="static_transform_publisher" name="base_link_to_sonar"
+      args="1.3 0 -0.7 0 0.4235987 3.14
+            /rexrov/base_link
+            /rexrov/sonar_pose 10"/>
 
   ## SLAM params and node ##
   <rosparam command="load" file="$(find fs-slam)/params/slam_params.yaml"/>

@@ -49,12 +49,11 @@ class Landmark:
             self.pixels_img2 = tuple(np.flip(np.round(keypts2[key2].pt).astype(int)))
             # ground truth for m_i from img1(X_a) and img2(X_b)
             self.cart_img1 = np.array([[map1[0][self.pixels_img1]],
-                                    [map1[1][self.pixels_img1]],
-                                    [map1[2][self.pixels_img1]]])
+                                       [map1[1][self.pixels_img1]],
+                                       [map1[2][self.pixels_img1]]])
             self.cart_img2 = np.array([[map2[0][self.pixels_img2]],
-                                    [map2[1][self.pixels_img2]],
-                                    [map1[2][self.pixels_img2]]])
-            # TODO(aldoteran): maybe this can be done better
+                                       [map2[1][self.pixels_img2]],
+                                       [map2[2][self.pixels_img2]]])
             self.is_shit = False
             if (self.cart_img1 == 0).any() or (self.cart_img2 == 0).any():
                 self.is_shit = True
@@ -63,6 +62,8 @@ class Landmark:
             self.elevation = 0.0
             # measurements in polar coordinates
             self.polar_img1 = self.cart_to_polar(self.cart_img1)
+            # TODO(aldoteran): check if simulated measurements can be fixed
+            # self.polar_img2 = self.cart_to_noisy_polar(self.cart_img1, T_Xb)
             self.polar_img2 = self.cart_to_polar(self.cart_img2)
             # ground truth for phi, for debugging
             self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
@@ -89,35 +90,23 @@ class Landmark:
             # pose from img2 (Xb)
             self.Xb = None
 
-
     def update_phi(self, phi):
         # Updates phi and elevation attributes (wrt X_a/img1)
         self.phi = phi
         self.elevation = self.polar_img1[1,0] * np.sin(phi)
 
-    def project_coords(self, phi):
-        """
-        Returns the projection of the X, Y and Z coordinates
-        given the elevation angle phi. Used for the search for
-        the optimal phi. Initial coords are from img1, i.e., as
-        seen from pose X_a.
-
-        :param phi: elevation angle in radians
-        :type phi: float
-
-        :return: Z, X and Y coordinates of the landmark
-        :rtype: np.array (3,1) [X,Y,Z]
-        """
-        r = self.polar_img1[1,0]
-        theta = self.polar_img1[0,0]
-
-        return np.array([[r * np.cos(theta) * np.cos(phi)],
-                         [r * np.sin(theta) * np.cos(phi)],
-                         [r * np.sin(phi)]])
-
     def cart_to_polar(self, cart):
         return np.array([[np.arctan2(cart[1,0],cart[0,0])],
                          [np.sqrt(cart[0,0]**2 + cart[1,0]**2 + cart[2,0]**2)]])
+
+    def cart_to_noisy_polar(self, p_i, T_Xb):
+        cart = T_Xb[:-1,:-1].transpose().dot(p_i - T_Xb[:-1,-1:])
+        theta = np.arctan2(cart[1,0],cart[0,0]) + np.random.normal(0, 5e-6)
+        # theta = np.arctan2(cart[1,0],cart[0,0])
+        dist = np.sqrt(cart[0,0]**2+cart[1,0]**2+cart[2,0]**2) + np.random.normal(0, 1.5e-5)
+        # # dist = np.sqrt(cart[0,0]**2+cart[1,0]**2+cart[2,0]**2)
+
+        return np.array([[theta],[dist]])
 
 
 class LandmarkDetector:
@@ -127,10 +116,10 @@ class LandmarkDetector:
     :param features: type of features to detect
     :type features: str
     """
-    BUFF_LEN = 4
+    BUFF_LEN = 10
     MIN_MATCHES_THRESH = 8
 
-    def __init__(self, verbose=True, debug=True):
+    def __init__(self, verbose=True, debug=False):
         self.detector = cv2.AKAZE_create()
         self.bridge = CvBridge()
         self.is_verbose = verbose
@@ -154,12 +143,9 @@ class LandmarkDetector:
     def _image_cb(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
         img = np.uint8(255 * (img / np.max(img)))
-        stamp = msg.header.stamp
-        idx = msg.header.seq
-        self.sonar_frame = msg.header.frame_id
-        self.img_buff.append((img,stamp,idx))
+        self.img_buff.append((img,msg.header.stamp,msg.header.seq))
         if len(self.img_buff) >= self.BUFF_LEN:
-            self.img_buff.pop(0)
+            self.img_buff.pop(-1)
 
     def _range_cb(self, msg):
         """
@@ -167,13 +153,13 @@ class LandmarkDetector:
         is a 3D array with channels (range, swath, depth).
         """
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
-        stamp = msg.header.stamp
         self.cart_map_buff.append((img[:,:,0],
                                    img[:,:,1],
                                    img[:,:,2],
-                                   stamp))
+                                   msg.header.stamp,
+                                   msg.header.seq))
         if len(self.cart_map_buff) >= self.BUFF_LEN:
-            self.cart_map_buff.pop(0)
+            self.cart_map_buff.pop(-1)
 
     def extract_n_match(self, imgs):
         """
@@ -234,9 +220,10 @@ class LandmarkDetector:
         :return: relative pose T_Xb expressed as an homogenous transformation matrix
         :rtype: np.array (4,4)
         """
+        sonar_frame = 'rexrov/sonar_pose'
         try:
-            self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
-                                                imgs[0][1], rospy.Duration(5.0))
+            # self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
+                                                # imgs[0][1], rospy.Duration(0.2))
             trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
                                                                 '/slam/optimized/sonar_pose',
                                                                 imgs[0][1])
@@ -247,7 +234,7 @@ class LandmarkDetector:
             rospy.logwarn("Using IMU odometry instead of optimized pose.")
             # get poses and compute T_xb from the IMU odometry.
             self.tf_listener.waitForTransform('/world', '/slam/dead_reckoning/sonar_pose',
-                                              imgs[1][1], rospy.Duration(5.0))
+                                                imgs[1][1], rospy.Duration(0.2))
             trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
                                                                 '/slam/dead_reckoning/sonar_pose',
                                                                 imgs[1][1])
@@ -263,7 +250,6 @@ class LandmarkDetector:
         T_Xb = np.linalg.inv(Xa).dot(Xb)
 
         if self.is_verbose:
-            sonar_frame = 'rexrov/forward_sonar_optical_frame'
             trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
                                                                 sonar_frame,
                                                                 imgs[0][1])
@@ -286,6 +272,8 @@ class LandmarkDetector:
                 return (T_Xb_true, Xb_true, Xa_true)
 
         return (T_Xb, Xb, Xa)
+        # for debugging
+        # return (T_Xb, Xb, Xa, T_Xb_true, Xb_true, Xa_true)
 
     def generate_landmarks(self, imgs, features, maps):
         """
@@ -303,12 +291,14 @@ class LandmarkDetector:
         :rtype: list [Landmark_0,...,Landmark_N]
         """
         T_Xb, Xb, Xa = self._relative_pose(imgs)
+        # for debugging
+        # T_Xb, Xb, Xa, T_true, Xb_true, Xa_true = self._relative_pose(imgs)
 
         self.landmarks = [Landmark(features[0], features[1], maps[0], maps[1],
                                    match[0].queryIdx, match[0].trainIdx,
-                                   T_Xb, Xb, Xa)
+                                   T_Xb, Xb, Xa, test=False)
+                                   # T_true, Xb, Xa, test=False)
                           for match in features[2]]
-        # TODO(aldoteran): use real outlier detection
         inliers = []
         for i,l in enumerate(self.landmarks):
             if l.is_shit:
@@ -316,6 +306,10 @@ class LandmarkDetector:
             inliers.append(i)
         # get rid of poorly contrained landmarks
         self.landmarks = np.asarray(self.landmarks)[inliers].tolist()
+        dist_list = np.zeros(len(self.landmarks))
+        for i in range(len(self.landmarks) - 1):
+            dist_list[i] = np.linalg.norm(self.landmarks[i].polar_img1 - self.landmarks[i+1].polar_img1)
+        self.landmarks = np.asarray(self.landmarks)[dist_list > 0.5].tolist()
 
         return self.landmarks
 
