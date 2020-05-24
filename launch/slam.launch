@@ -1,6 +1,6 @@
 <launch>
   ## Set as true when running rosbags ##
-  <param name="/use_sim_time" value="true"/>
+  <param name="/use_sim_time" value="false"/>
 
   <!--args="1.3 0 -0.7 -1.57 0 -1.99-->
   ## Static trasform of the sonar optical frame (from gazebo) ##
@@ -18,8 +18,8 @@
   <node name="slam_node" pkg="fs-slam" type="slam_node" output="screen"/>
 
   ## Sonar bundle adjustment node ##
-  <param name="verbose" value="true"/>
-  <node name="two_view_adjustment" pkg="fs-slam" type="two_view_adjustment.py"
-        output="screen"/>
+  <!--<param name="verbose" value="true"/>-->
+  <!--<node name="two_view_adjustment" pkg="fs-slam" type="two_view_adjustment.py"-->
+        <!--output="screen"/>-->
 
 </launch>

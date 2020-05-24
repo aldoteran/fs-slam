@@ -85,17 +85,15 @@ class BundleAdjuster:
 
         #for debugging
         delta_norm_vector = []
-        phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx = self._opt_phi_search(x_init,
-                                                                                  z_b,
-                                                                                  T_Xb,
-                                                                                  sigma, N,
-                                                                                  landmarks)
+        fig, ax_3d, axs = utils.init_all_plots()
+        phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx, \
+            q_proj_x, q_proj_y, q_proj_z = self._opt_phi_search(axs, x_init, z_b, T_Xb, sigma, N, landmarks)
         # phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
         # phis = [l.real_phi for l in landmarks]
 
         # for debugging
-        fig, ax = utils.init_plot(x_init, landmarks, phis, phi_proj_x,
-                                  phi_proj_y, phi_proj_z, Xa, Xb, best_idx)
+        fig, ax_3d = utils.init_3d_plot(fig, ax_3d,x_init, landmarks, phis, phi_proj_x,
+                                     phi_proj_y, phi_proj_z, Xa, Xb, best_idx)
 
         # Stop condition
         epsilon = 0.001
@@ -120,9 +118,6 @@ class BundleAdjuster:
             x_init += delta
             T_Xb = self._update_transform(Xa, x_init)
 
-            # for debugging
-            utils.plot_pose(fig, ax, T_Xb)
-
             # (5) Check if converged
             if self.verbose:
                 rospy.logwarn("Delta norm for iter {}: {}".format(it, delta_norm))
@@ -135,6 +130,9 @@ class BundleAdjuster:
             return
         # Return the sate if in test mode
         if self.is_test:
+            # for debugging
+            utils.update_pose(fig, ax_3d, T_Xb, landmarks)
+            utils.plot_search(ax_3d, landmarks, T_Xb, q_proj_x, q_proj_y, q_proj_z, self.phi_range, best_idx)
             return (x_init, T_Xb, phis, S, delta_norm_vector,
                     phi_proj_x, phi_proj_y, phi_proj_z,
                     covariance, best_idx)
@@ -179,7 +177,7 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, sigma, N, landmarks):
+    def _opt_phi_search(self, axs, x, z_b, T_Xb, sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -191,6 +189,11 @@ class BundleAdjuster:
         phi_proj_x = []
         phi_proj_y = []
         phi_proj_z = []
+        q_proj_x = []
+        q_proj_y = []
+        q_proj_z = []
+        j = 0
+        k = 2
 
         for i in range(0,2*N,2):
             best_phi = 0.0
@@ -199,20 +202,28 @@ class BundleAdjuster:
             polar = x[6+i:6+i+2,:]
             # debugging
             rep_error = []
-            p_x = []
-            p_y = []
-            p_z = []
+            phi_x = []
+            phi_y = []
+            phi_z = []
+            q_x = []
+            q_y = []
+            q_z = []
             for phi in self.phi_range:
                 # debugging
                 p_i = self._project_coords(polar, phi)
-                p_x.append(p_i[0,0])
-                p_y.append(p_i[1,0])
-                p_z.append(p_i[2,0])
+                phi_proj_x.append(p_i[0,0])
+                phi_proj_y.append(p_i[1,0])
+                phi_proj_z.append(p_i[2,0])
+                phi_x.append(p_i[0,0])
+                phi_y.append(p_i[1,0])
+                phi_z.append(p_i[2,0])
                 q_i = rot_Xb.transpose().dot(self._project_coords(polar, phi) - trans_Xb)
-                # for debugging
-                phi_proj_x.append(q_i[0,0])
-                phi_proj_y.append(q_i[1,0])
-                phi_proj_z.append(q_i[2,0])
+                q_x.append(q_i[0,0])
+                q_y.append(q_i[1,0])
+                q_z.append(q_i[2,0])
+                q_proj_x.append(q_i[0,0])
+                q_proj_y.append(q_i[1,0])
+                q_proj_z.append(q_i[2,0])
                 innov = self.cart_to_polar(q_i) - z_bi
                 error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
                 # for debugging
@@ -222,11 +233,22 @@ class BundleAdjuster:
                     old_error = error
                     # for debugging
                     best_idx = i/2
+            # for debugging
+            utils.plot_single_search(landmarks[i/2], polar, T_Xb, best_phi,
+                                     old_error, rep_error, phi_x, phi_y, phi_z,
+                                     q_x, q_y, q_z, self.phi_range, best_idx)
+            utils.plot_rep_error(axs, j, k, rep_error, old_error, best_phi,
+                                 landmarks[i/2].real_phi, self.phi_range, i/2)
+            k += 1
+            if k > 4:
+                k = 2
+                j += 1
+
             phis.append(best_phi)
 
         # return phis
         #for debugging
-        return (phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx)
+        return (phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx, q_proj_x, q_proj_y, q_proj_z)
 
     def _project_coords(self, polar, phi):
         """

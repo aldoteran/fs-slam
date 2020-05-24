@@ -4,20 +4,34 @@
 node_loop_rate: 50
 
 # Topic in which the IMU measurements are being received.
-imu_meas_topic: /rexrov/imu
+imu_meas_topic: /imu/data
 
 # Measurement noise characteristics:
-# TODO(tonioteran) UNINFORMED GUESSES FOR EVERYTHING.
 # --Prior factors:
 # Standard deviation of the prior information's translation components [m].
 prior_pos_stddev: 0.0001
 # Standard deviation of the prior information's rotation components [deg].
 prior_rot_stddev: 0.000001
+
 # --IMU measurements:
-# Standard deviation for the linear acceleration measurements [???].
-imu_accel_stddev: 5.0e-4
+# VALUES FOR SBG ELLIPSE A
+# Standard deviation for the linear acceleration measurements [m/s2].
+accel_noise_x: 5.6898e-3
+accel_noise_y: 5.7879e-3
+accel_noise_z: 5.1993e-3
+# Bias standard deviation for the linear acceleration measurements [m/s2]
+accel_bias_x: 4.8069e-3
+accel_bias_y: 3.0411e-3
+accel_bias_z: 3.7278e-3
+# NOTE: Values depend on the IMU frequency!!
 # Standard deviation for the angular velocity measurements [???].
-imu_omega_stddev: 9.6962e-6
+gyro_noise_x: 1.047197e-5
+gyro_noise_y: 1.047197e-5
+gyro_noise_z: 1.047197e-5
+# Bias standard deviation for the angular velocity measurements [rad/s]
+gyro_bias_x: 6.727274e-6
+gyro_bias_y: 2.061427e-6
+gyro_bias_z: 2.502608e-6
 # Measurement frequency [Hz].
 imu_frequency: 50.0
 
