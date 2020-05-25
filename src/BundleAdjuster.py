@@ -29,7 +29,7 @@ class BundleAdjuster:
     TBA
     """
     def __init__(self, verbose=True, test=False, debug=False,
-                 benchmark=False, condition=100.0, iters=1):
+                 benchmark=False, condition=100.0, iters=5):
         # Flags
         self.is_test = test
         self.is_debug = debug
@@ -109,7 +109,8 @@ class BundleAdjuster:
 
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            S[S<20] = 0.0
+            print(S)
+            S[S<5.0] = 0.0
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
@@ -120,6 +121,7 @@ class BundleAdjuster:
             delta_norm_vector.append(delta_norm)
             x_init += delta
             T_Xb = self._update_transform(Xa, x_init)
+            print(delta_norm)
 
             # (5) Check if converged
             if self.verbose:
@@ -127,6 +129,7 @@ class BundleAdjuster:
             if delta_norm < epsilon or it >= self.iters:
                 break
 
+        print('------------ NEXT ITER ------------')
         covariance = self._get_sqrt_information(A_d)
         if self.is_singular:
             self.is_singular = False
@@ -153,31 +156,14 @@ class BundleAdjuster:
         self._publish_pointcloud(x_init, phis)
 
     def _init_state(self, landmarks, Xb, T_Xb, N):
-        """
-        Initialize state.
-
-        :param landmarks: list of landmarks
-        :type landmarks: list [Landmark_1,...,Landmark_N]
-
-        :param T_Xb: relative pose btwn pose Xa and Xb represented by a
-                     4 by 4 rigid transformation matrix
-        :type T_Xb: np.array (4,4)
-
-        :return: initial state vector
-        :rtype: np.array (6+2*N, 1)
-        """
-        x = np.zeros((6+2*N, 1))
+        x = np.zeros((12+2*N, 1))
         z_a = np.zeros((2*N, 1))
         z_b = np.zeros((2*N, 1))
-        # X Y Z Y P R
-        quat = tf.transformations.quaternion_from_matrix(T_Xb)
-        euler = tf.transformations.euler_from_quaternion(quat)
-        x[0:6,0:1] = np.array([[T_Xb[0,-1]],[T_Xb[1,-1]],[T_Xb[2,-1]],
-                             [euler[2]],[euler[1]],[euler[0]]])
-                             # [euler[0]],[euler[1]],[euler[2]]])
+        # Vectorize Relative transform
+        x[0:12,0:] = np.expand_dims(T_Xb[:-1,:].transpose().ravel(),1)
         i = 0
         for l in landmarks:
-            x[6+i:6+i+2,:] = l.polar_img1
+            x[12+i:12+i+2,:] = l.polar_img1
             z_a[i:i+2,:] = l.polar_img1
             z_b[i:i+2,:] = l.polar_img2
             i += 2
@@ -208,7 +194,7 @@ class BundleAdjuster:
             best_phi = 0.0
             old_error = 9999
             z_bi = z_b[i:i+2,:]
-            polar = x[6+i:6+i+2,:]
+            polar = x[12+i:12+i+2,:]
             # debugging
             if self.is_test:
                 rep_error = []
@@ -289,12 +275,11 @@ class BundleAdjuster:
         """
         Update T_Xb
         """
-        trans = np.array([[x[0,0]],[x[1,0]],[x[2,0]]])
-        # Y P R in state
-        quat = tf.transformations.quaternion_from_euler(x[5,0], x[4,0], x[3,0])
-        # quat = tf.transformations.quaternion_from_euler(x[3,0], x[4,0], x[5,0])
-        T_Xb = tf.transformations.quaternion_matrix(quat)
-        T_Xb[:-1,-1:] = trans
+        T_Xb = np.eye(4)
+        T_Xb[:-1,-1:] = np.array([[x[9,0]],[x[10,0]],[x[11,0]]])
+        T_Xb[:-1,:-1] = np.array([[x[0,0], x[3,0], x[6,0]],
+                                  [x[1,0], x[4,0], x[7,0]],
+                                  [x[2,0], x[5,0], x[8,0]]])
 
         return T_Xb
 
@@ -302,22 +287,21 @@ class BundleAdjuster:
         return T_Xb[:-1,:-1].transpose().dot(cart - T_Xb[:-1, -1:])
 
     def _get_jacobians(self, x, T_Xb, phis, sqrt_sigma, N):
-        """
-        Jacobians from the paper
-        """
-        # TODO(aldoteran): there should be a better way to do this
+        R = T_Xb[:-1,:-1]
+        t = T_Xb[:-1,-1]
+
         info_theta = sqrt_sigma[0,0]
         info_range = sqrt_sigma[1,1]
         diag = [info_range if i%2==0 else info_theta for i in range(1,2*N+1,1)]
 
-        H_A = np.hstack((np.zeros((2*N,6)), np.diag(diag)))
+        H_A = np.hstack((np.zeros((2*N,12)), np.diag(diag)))
 
-        H_B = np.zeros((2*N, 6+2*N))
+        H_B = np.zeros((2*N, 12+2*N))
         for j,i in enumerate(range(0,2*N,2)):
-            polar = np.array([[x[6+i,0]],
-                              [x[6+i+1,0]],
+            polar = np.array([[x[12+i,0]],
+                              [x[12+i+1,0]],
                               [phis[j]]])
-            p = self.polar_to_cart(polar)
+            p = np.squeeze(self.polar_to_cart(polar))
             q = self._predict_hb(T_Xb, p)
 
             zhat_q = np.array([[-q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2),
@@ -325,18 +309,21 @@ class BundleAdjuster:
                             [q[0,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
                                 q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
                                 q[2,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2)]])
-            q_xb = np.array([[0.0, -q[2,0], q[1,0]],
-                             [q[2,0], 0.0, -q[0,0]],
-                             [-q[1,0], q[0,0], 0.0]])
-            H_B[i:i+2,0:6] = zhat_q.dot(np.hstack((q_xb, -np.eye(3))))
+            q_xb = np.array([[p[0]-t[0], p[1]-t[1], p[2]-t[2], 0, 0, 0, 0, 0, 0,
+                              -R[0,0], -R[1,0], -R[2,0]],
+                             [0, 0, 0, p[0]-t[0], p[1]-t[1], p[2]-t[2], 0, 0, 0,
+                              -R[0,1], -R[1,1], -R[2,1]],
+                             [0, 0, 0, 0, 0, 0, p[0]-t[0], p[1]-t[1], p[2]-t[2],
+                              -R[0,2], -R[1,2], -R[2,2]]])
+            H_B[i:i+2,0:12] = zhat_q.dot(q_xb)
 
-            q_p = T_Xb[:-1, :-1].transpose()
+            q_p = R.transpose()
             p_mi = np.array([[-polar[1,0]*np.sin(polar[0,0])*np.cos(polar[2,0]),
                               np.cos(polar[0,0])*np.cos(polar[2,0])],
                             [polar[1,0]*np.cos(polar[0,0])*np.cos(polar[2,0]),
                              np.sin(polar[0,0])*np.cos(polar[2,0])],
                             [0.0, np.sin(polar[2,0])]])
-            H_B[i:i+2,6+1*i:6+2+1*i] = zhat_q.dot(q_p).dot(p_mi)
+            H_B[i:i+2,12+1*i:12+2+1*i] = zhat_q.dot(q_p).dot(p_mi)
             # Whiten
             H_B[i:i+2,:] = sqrt_sigma.dot(H_B[i:i+2,:])
 
@@ -344,22 +331,20 @@ class BundleAdjuster:
 
     def _get_error_b(self, x, T_Xb, phis, z_a, z_b, sqrt_sigma, N):
         """
-        TODO
-
         :param x: state
         :type x: np.array (12+2*N,1)
 
         :return: predicted range-bearing measurement of landmark from Xa to Xb
         :rtype: np.array (2,1) [theta, range]
         """
-        b_a = np.zeros((x.shape[0]-6, 1))
-        b_b = np.zeros((x.shape[0]-6, 1))
+        b_a = np.zeros(z_a.shape)
+        b_b = np.zeros(z_b.shape)
         rot_Xb = T_Xb[:-1, :-1]
         trans_Xb = T_Xb[:-1, -1:]
 
         for j,i in enumerate(range(0,2*N,2)):
-            polar = np.array([[x[6+i,0]],
-                              [x[6+i+1,0]],
+            polar = np.array([[x[12+i,0]],
+                              [x[12+i+1,0]],
                               [phis[j]]])
             b_a[i:i+2,:] = sqrt_sigma.dot(z_a[i:i+2,:] - polar[0:2,:])
             q_i = rot_Xb.transpose().dot(self.polar_to_cart(polar) - trans_Xb)

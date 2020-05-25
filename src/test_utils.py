@@ -122,19 +122,14 @@ def cart_to_polar(cart):
     return np.array([[np.arctan2(cart[1,0],cart[0,0])],
                      [np.sqrt(cart[0,0]**2 + cart[1,0]**2 + cart[2,0]**2)]])
 
-def update_landmarks(landmarks, true_pose, noisy_pose=None):
+def update_landmarks(landmarks, true_pose, noisy_pose):
     relative_pose = np.linalg.inv(landmarks[0].Xa).dot(true_pose)
-    if type(noisy_pose) != None:
-        noisy_relative_pose = np.linalg.inv(landmarks[0].Xa).dot(noisy_pose)
+    noisy_relative_pose = np.linalg.inv(landmarks[0].Xa).dot(noisy_pose)
     for l in landmarks:
         l.cart_img2 = project_landmark(l.cart_img1, relative_pose)
         l.polar_img2 = cart_to_polar(l.cart_img2)
-        if type(noisy_pose) != None:
-            l.rel_pose = noisy_relative_pose
-            l.Xb = noisy_pose
-        else:
-            l.rel_pose = relative_pose
-            l.Xb = true_pose
+        l.rel_pose = noisy_relative_pose
+        l.Xb = noisy_pose
         l.real_phi = np.arcsin(l.cart_img1[2,0]/l.polar_img1[1,0])
         l.update_phi(l.real_phi)
 
@@ -340,36 +335,6 @@ def plot_scene(fig, ax, state, landmarks, phis, phi_x, phi_y, phi_z, best_idx):
                textcoords='offset points', ha='right', va='bottom')
 
     return (fig, ax)
-
-def compare_results(landmarks, state, relative_pose, phis,
-                    singular_values, error_vector, phi_x, phi_y, phi_z,
-                    best_idx, Xb_true):
-
-    # Optimized relative pose
-    print("-- Optimized Relative Pose --")
-    print(np.round(relative_pose,4))
-    print("-- Real Relative Pose --")
-    print(np.round(np.linalg.inv(landmarks[0].Xa).dot(Xb_true),4))
-    print("-- Relative Pose Diff --")
-    print(np.round(landmarks[0].rel_pose - relative_pose,4))
-
-    # Optimized Landmarks
-    real_landmarks = np.zeros((2*len(landmarks),1))
-    real_phis = []
-    i=0
-    for l in landmarks:
-        real_landmarks[i:i+2,:] = l.polar_img1
-        real_phis.append(l.phi)
-        i += 2
-    print("-- Landmark Diff --")
-    print(real_landmarks - state[6:,:])
-    print("-- Phi Diff --")
-    print(np.asarray(real_phis) - np.asarray(phis))
-
-    # Plot iteration error
-    plt.figure()
-    plt.title("Magnitude of Delta per Iteration")
-    plt.plot(error_vector)
 
 def plot_single_search(landmark, polar_state, relative_pose, best_phi,
                        old_error, rep_error, phi_x, phi_y, phi_z,
@@ -597,7 +562,7 @@ def random_test(N, rot_stddev, pos_stddev):
     Run the bundle adjustment framework N times with random poses and landmarks.
     Computes the error and plots the relevant data to evaluate the performance.
     """
-    adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True, iters=5)
+    adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True, iters=10)
 
     # Pose error
     x_err = []
@@ -620,20 +585,21 @@ def random_test(N, rot_stddev, pos_stddev):
         Xb_true, Xb = create_random_poses(rot_stddev, pos_stddev)
         landmarks = create_landmarks(9, Xb_true, Xb)
         try:
-            state, relative_pose, phis = adjuster.compute_constraint(landmarks,
-                                                                     rot_stddev,
-                                                                     pos_stddev)
+            state, relative_pose, phis = adjuster.compute_constraint(landmarks)
+                                                                     # rot_stddev,
+                                                                     # pos_stddev)
         except TypeError:
             continue
         # Translation error
-        x_err.append(np.linalg.norm(Xb_true[0,-1] - state[0,0]))
-        y_err.append(np.linalg.norm(Xb_true[1,-1] - state[1,0]))
-        z_err.append(np.linalg.norm(Xb_true[2,-1] - state[2,0]))
+        x_err.append(np.linalg.norm(Xb_true[0,-1] - relative_pose[0,-1]))
+        y_err.append(np.linalg.norm(Xb_true[1,-1] - relative_pose[1,-1]))
+        z_err.append(np.linalg.norm(Xb_true[2,-1] - relative_pose[2,-1]))
         # Rotation error
         roll, pitch, yaw = tf.transformations.euler_from_matrix(Xb_true)
-        yaw_err.append(np.linalg.norm(yaw - state[3,0]))
-        pitch_err.append(np.linalg.norm(pitch - state[4,0]))
-        roll_err.append(np.linalg.norm(roll - state[5,0]))
+        roll_est, pitch_est, yaw_est = tf.transformations.euler_from_matrix(relative_pose)
+        yaw_err.append(np.linalg.norm(yaw - yaw_est))
+        pitch_err.append(np.linalg.norm(pitch - pitch_est))
+        roll_err.append(np.linalg.norm(roll - roll_est))
         # Initial error
         roll_, pitch_, yaw_ = tf.transformations.euler_from_matrix(Xb)
         x_init.append(np.linalg.norm(Xb_true[0,-1] - Xb[0,-1]))
@@ -646,8 +612,8 @@ def random_test(N, rot_stddev, pos_stddev):
         k = 0
         for j,l in enumerate(landmarks):
             polar = l.polar_img1
-            bearing_err.append(np.linalg.norm(state[6+k,0] - polar[0,0]))
-            range_err.append(np.linalg.norm(state[6+k+1,0] - polar[1,0]))
+            bearing_err.append(np.linalg.norm(state[12+k,0] - polar[0,0]))
+            range_err.append(np.linalg.norm(state[12+k+1,0] - polar[1,0]))
             phi_err.append(np.linalg.norm(phis[j] - l.real_phi))
             k += 2
 
