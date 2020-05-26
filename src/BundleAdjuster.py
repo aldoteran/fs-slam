@@ -189,7 +189,7 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, sigma, N, landmarks):
+    def _opt_phi_search(self, x, z_b, T_Xb, inv_sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -241,7 +241,7 @@ class BundleAdjuster:
                     q_proj_y.append(q_i[1,0])
                     q_proj_z.append(q_i[2,0])
                 innov = self.cart_to_polar(q_i) - z_bi
-                error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
+                error = innov.transpose().dot(inv_sigma).dot(innov)
                 # for debugging
                 if self.is_test:
                     rep_error.append(error[0,0])
