@@ -29,7 +29,7 @@ class BundleAdjuster:
     TBA
     """
     def __init__(self, verbose=True, test=False, debug=False,
-                 benchmark=False, iters=5, svd_thresh=50):
+                 benchmark=False, iters=10, svd_thresh=50):
         # Flags
         self.is_test = test
         self.is_debug = debug
@@ -41,8 +41,8 @@ class BundleAdjuster:
         # TODO(aldoteran): add this to the config file
         self.iters = iters
         self.svd_threshold = svd_thresh
-        # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
-        self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
+        self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        # self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
         self.pointcloud = [[],[],[]]
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -83,29 +83,14 @@ class BundleAdjuster:
         N = len(landmarks)
         Xb = landmarks[0].Xb
         Xa = landmarks[0].Xa
-        T_Xb = np.linalg.inv(Xa).dot(Xb)
+        T_Xb = landmarks[0].rel_pose
         x_init, z_a, z_b = self._init_state(landmarks, Xb, T_Xb, N)
 
-        #for debugging
-        delta_norm_vector = [0.5]
-        if self.is_test:
-            fig, ax_3d, axs = utils.init_all_plots()
-            phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx, \
-                q_proj_x, q_proj_y, q_proj_z = self._opt_phi_search(axs, x_init, z_b, T_Xb, sigma, N, landmarks)
-        else:
-            phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
+        phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
         # phis = [l.real_phi for l in landmarks]
-
-        # for debugging
-        if self.is_test:
-            fig, ax_3d = utils.init_3d_plot(fig, ax_3d,x_init, landmarks, phis, phi_proj_x,
-                                        phi_proj_y, phi_proj_z, Xa, Xb, best_idx)
 
         # Stop condition
         epsilon = 0.01
-
-        #for debugging
-        cond_nums = []
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
@@ -114,34 +99,17 @@ class BundleAdjuster:
             b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
 
             # (3) SVD of A and thresholding of singular values
-            try:
-                U, S, V = np.linalg.svd(A, full_matrices=False)
-            except:
-                return
+            U, S, V = np.linalg.svd(A, full_matrices=False)
             S[S<self.svd_threshold] = 0.0
-            cond_nums.append(np.max(S)/np.min(S[np.nonzero(S)]))
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
             delta = np.linalg.pinv(A_d).dot(b)
-            delta_norm = np.linalg.norm(delta)
-
-            #for debugging
             x_init += delta
             T_Xb = self._update_transform(Xa, x_init)
 
-            if self.is_test:
-                # for debugging
-                utils.update_pose(fig, ax_3d, T_Xb, landmarks)
-
-            if delta_norm > delta_norm_vector[-1]:
-                return
-            delta_norm_vector.append(delta_norm)
-
             # (5) Check if converged
-            if self.verbose:
-                rospy.logwarn("Delta norm for iter {}: {}".format(it, delta_norm))
-            if delta_norm < epsilon or it >= self.iters:
+            if np.linalg.norm(delta) < epsilon or it >= self.iters:
                 break
 
         covariance = self._get_sqrt_information(A_d)
@@ -149,30 +117,13 @@ class BundleAdjuster:
             self.is_singular = False
             return
 
-        #for debugging
-        import matplotlib.pyplot as plt
-        # plt.plot(cond_nums)
-        plt.plot(delta_norm_vector)
-
-        # Return the sate if in test mode
-        if self.is_test:
-            # for debugging
-            utils.update_pose(fig, ax_3d, T_Xb, landmarks)
-            utils.plot_search(ax_3d, landmarks, T_Xb, q_proj_x, q_proj_y, q_proj_z, self.phi_range, best_idx)
-            return (x_init, T_Xb, phis, S, delta_norm_vector,
-                    phi_proj_x, phi_proj_y, phi_proj_z,
-                    covariance, best_idx)
-        if self.is_benchmark:
-            return (x_init, T_Xb, phis)
-
         # Publish everything
         if self.verbose:
             rospy.loginfo("Resulting relative pose:\n{}".format(T_Xb))
-            rospy.loginfo("Resulting covariance matrix:\n{}".format(covariance))
         self._publish_pose_constraint(T_Xb, covariance)
-        self._publish_pose(x_init, sigma, covariance)
-        self._publish_true_odom(Xb)
-        self._publish_pointcloud(x_init, phis)
+        # self._publish_pose(x_init, sigma, covariance)
+        # self._publish_true_odom(Xb)
+        # self._publish_pointcloud(x_init, phis)
 
     def _init_state(self, landmarks, Xb, T_Xb, N):
         x = np.zeros((12+2*N, 1))
@@ -189,7 +140,7 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, sigma, N, landmarks):
+    def _opt_phi_search(self, x, z_b, T_Xb, inv_sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -197,76 +148,20 @@ class BundleAdjuster:
         trans_Xb = T_Xb[:-1,-1:]
         phis = []
 
-        # for debugging
-        if self.is_test:
-            phi_proj_x = []
-            phi_proj_y = []
-            phi_proj_z = []
-            q_proj_x = []
-            q_proj_y = []
-            q_proj_z = []
-            j = 0
-            k = 2
-
         for i in range(0,2*N,2):
             best_phi = 0.0
             old_error = 9999
             z_bi = z_b[i:i+2,:]
             polar = x[12+i:12+i+2,:]
-            # debugging
-            if self.is_test:
-                rep_error = []
-                phi_x = []
-                phi_y = []
-                phi_z = []
-                q_x = []
-                q_y = []
-                q_z = []
             for phi in self.phi_range:
-                # debugging
-                if self.is_test:
-                    p_i = self._project_coords(polar, phi)
-                    phi_proj_x.append(p_i[0,0])
-                    phi_proj_y.append(p_i[1,0])
-                    phi_proj_z.append(p_i[2,0])
-                    phi_x.append(p_i[0,0])
-                    phi_y.append(p_i[1,0])
-                    phi_z.append(p_i[2,0])
                 q_i = rot_Xb.transpose().dot(self._project_coords(polar, phi) - trans_Xb)
-                if self.is_test:
-                    q_x.append(q_i[0,0])
-                    q_y.append(q_i[1,0])
-                    q_z.append(q_i[2,0])
-                    q_proj_x.append(q_i[0,0])
-                    q_proj_y.append(q_i[1,0])
-                    q_proj_z.append(q_i[2,0])
                 innov = self.cart_to_polar(q_i) - z_bi
-                error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
-                # for debugging
-                if self.is_test:
-                    rep_error.append(error[0,0])
+                error = innov.transpose().dot(inv_sigma).dot(innov)
                 if error < old_error:
                     best_phi = phi
                     old_error = error
-                    # for debugging
-                    best_idx = i/2
-            # for debugging
-            if self.is_test:
-                # utils.plot_single_search(landmarks[i/2], polar, T_Xb, best_phi,
-                                        # old_error, rep_error, phi_x, phi_y, phi_z,
-                                        # q_x, q_y, q_z, self.phi_range, best_idx)
-                # utils.plot_rep_error(axs, j, k, rep_error, old_error, best_phi,
-                                    # landmarks[i/2].real_phi, self.phi_range, i/2)
-                k += 1
-                if k > 4:
-                    k = 2
-                    j += 1
-
             phis.append(best_phi)
 
-        #for debugging
-        if self.is_test:
-            return (phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx, q_proj_x, q_proj_y, q_proj_z)
         return phis
 
     def _project_coords(self, polar, phi):
