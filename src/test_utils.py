@@ -8,6 +8,8 @@ np.set_printoptions(suppress=True)
 import pickle
 import random
 
+import matplotlib
+matplotlib.rcParams['text.usetex'] = True
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.patches import FancyArrowPatch
@@ -63,11 +65,11 @@ def create_landmarks(N, Xb, Xb_noisy=None, Xa=None, T_Xb=None, origin=False):
         if origin:
             l.Xa = Xa
         else:
-            # l.Xa = tf.transformations.euler_matrix(np.pi, 0, 0)
+            x = np.round(random.uniform(MIN_RANGE, MAX_RANGE),3)
+            y = np.round(random.uniform(x*np.sin(THETA_MIN), x*np.sin(THETA_MAX)),3)
+            z = np.round(random.uniform(x*np.sin(PHI_MIN), x*np.sin(PHI_MAX)),3)
             l.Xa = np.eye(4)
-            l.cart_img1 = np.array([[np.round(random.uniform(8,16),3)],
-                                    [np.round(random.uniform(-6,6),3)],
-                                    [np.round(random.uniform(0,6),3)]])
+            l.cart_img1 = np.array([[x],[y],[z]])
             l.polar_img1 = cart_to_polar(l.cart_img1)
     landmarks = update_landmarks(landmarks, Xb, Xb_noisy)
 
@@ -99,9 +101,9 @@ def create_random_poses(rot_stddev, pos_stddev):
 
     Returns a noisy pose and a true pose
     """
-    t = np.array([[np.round(random.uniform(-1, 1), 3)],
-                  [np.round(random.uniform(-1, 1), 3)],
-                  [np.round(random.uniform(-1, 1), 3)]])
+    t = np.array([[np.round(random.uniform(-0.3, 0.3), 3)],
+                  [np.round(random.uniform(-0.3, 0.3), 3)],
+                  [np.round(random.uniform(-0.3, 0.3), 3)]])
     roll = np.round(random.uniform(-0.3, 0.3), 3)
     pitch = np.round(random.uniform(-0.3, 0.3), 3)
     yaw = np.round(random.uniform(-0.3, 0.3), 3)
@@ -127,7 +129,8 @@ def update_landmarks(landmarks, true_pose, noisy_pose):
     noisy_relative_pose = np.linalg.inv(landmarks[0].Xa).dot(noisy_pose)
     for l in landmarks:
         l.cart_img2 = project_landmark(l.cart_img1, relative_pose)
-        l.polar_img2 = cart_to_polar(l.cart_img2)
+        polar = cart_to_polar(l.cart_img2)
+        l.polar_img2 = polar + np.ones((2,1))*np.random.normal(0,0.01)
         l.rel_pose = noisy_relative_pose
         l.Xb = noisy_pose
         l.real_phi = np.arcsin(l.cart_img1[2,0]/l.polar_img1[1,0])
@@ -165,6 +168,9 @@ def polar_to_cart(polar):
 THETA_MAX = 0.6108
 THETA_MIN = -0.6108
 MAX_RANGE = 17.0
+MIN_RANGE = 0.5
+PHI_MAX = 0.1047
+PHI_MIN = 0.1047
 
 def init_all_plots():
     fig, axs = plt.subplots(ncols=5, nrows=3)
@@ -209,13 +215,13 @@ def update_pose(fig, ax, relative_pose, landmarks):
     zed = rot.dot(np.array([[0],[0],[2]])) + trans
     t = trans[:,-1]
     pose_x = Arrow3D([t[0],ex[0,0]],[t[1],ex[1,0]],[t[2],ex[2,0]], mutation_scale=1, lw=3,
-                       arrowstyle="-|>", color='r')
+                       arrowstyle="->", color='r')
     poses.append(pose_x)
     pose_y = Arrow3D([t[0],why[0,0]],[t[1],why[1,0]],[t[2],why[2,0]], mutation_scale=1, lw=3,
-                       arrowstyle="-|>", color='g')
+                       arrowstyle="->", color='g')
     poses.append(pose_y)
     pose_z = Arrow3D([t[0],zed[0,0]],[t[1],zed[1,0]],[t[2],zed[2,0]], mutation_scale=1, lw=3,
-                       arrowstyle="-|>", color='b')
+                       arrowstyle="->", color='b')
     poses.append(pose_z)
     for a in poses:
         ax.add_artist(a)
@@ -259,9 +265,9 @@ def plot_scene(fig, ax, state, landmarks, phis, phi_x, phi_y, phi_z, best_idx):
     ax.set_xlabel('Range')
     ax.set_ylabel('Swath')
     ax.set_zlabel('Depth')
-    ax.set_xlim3d(-1, 16+1)
-    ax.set_ylim3d(11, -11)
-    ax.set_zlim3d(8+1, -8-1)
+    ax.set_xlim3d(-1, 8)
+    ax.set_ylim3d(6, -6)
+    ax.set_zlim3d(3+1, -3-1)
 
     # Landmarks
     x = []
@@ -274,8 +280,12 @@ def plot_scene(fig, ax, state, landmarks, phis, phi_x, phi_y, phi_z, best_idx):
         z.append(l.cart_img1[2,0])
     ax.scatter(x,y,z, marker='o', color='g', s=72, alpha=0.8,
                label='True Landmark')
+
     # Estimates
-    for j,i in enumerate(range(6,len(state),2)):
+    x = []
+    y = []
+    z = []
+    for j,i in enumerate(range(12,len(state),2)):
         polar = np.array([[state[i,0]],
                           [state[i+1,0]],
                           [phis[j]]])
@@ -417,13 +427,13 @@ def plot_single_search(landmark, polar_state, relative_pose, best_phi,
     # Plot poses
     #Xa always at origin
     poses = []
-    origin_x = Arrow3D([0,0.5],[0,0],[0,0], mutation_scale=1, lw=1,
+    origin_x = Arrow3D([0,2],[0,0],[0,0], mutation_scale=1, lw=1,
                        arrowstyle="-|>", color='r')
     poses.append(origin_x)
-    origin_y = Arrow3D([0,0],[0,0.5],[0,0], mutation_scale=1, lw=1,
+    origin_y = Arrow3D([0,0],[0,2],[0,0], mutation_scale=1, lw=1,
                        arrowstyle="-|>", color='g')
     poses.append(origin_y)
-    origin_z = Arrow3D([0,0],[0,0],[0,0.5], mutation_scale=1, lw=1,
+    origin_z = Arrow3D([0,0],[0,0],[0,2], mutation_scale=1, lw=1,
                        arrowstyle="-|>", color='b')
     poses.append(origin_z)
 
@@ -432,9 +442,9 @@ def plot_single_search(landmark, polar_state, relative_pose, best_phi,
     # why = rot.dot(np.array([[0],[0.5],[0]]) + trans)
     # zed = rot.dot(np.array([[0],[0],[0.5]]) + trans)
     # t = rot.dot(trans)[:,-1]
-    ex = rot.dot(np.array([[0.5],[0],[0]])) + trans
-    why = rot.dot(np.array([[0],[0.5],[0]])) + trans
-    zed = rot.dot(np.array([[0],[0],[0.5]])) + trans
+    ex = rot.dot(np.array([[2],[0],[0]])) + trans
+    why = rot.dot(np.array([[0],[2],[0]])) + trans
+    zed = rot.dot(np.array([[0],[0],[2]])) + trans
     t = relative_pose[:,-1]
     pose_x = Arrow3D([t[0],ex[0,0]],[t[1],ex[1,0]],[t[2],ex[2,0]], mutation_scale=1, lw=3,
                        arrowstyle="-|>", color='r')
@@ -557,13 +567,119 @@ def setBoxColors(bp):
     plt.setp(bp['whiskers'][3], linewidth=2)
     plt.setp(bp['medians'][1], linewidth=2)
 
-def random_test(N, rot_stddev, pos_stddev):
+def random_test_stddev(N, rot_stddev, pos_stddev):
     """
     Run the bundle adjustment framework N times with random poses and landmarks.
     Computes the error and plots the relevant data to evaluate the performance.
     """
-    adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True, iters=10)
+    stddevs = [0.005, 0.01, 0.05, 0.1, 0.15, 0.2, 0.25]
+    for p in range(len(stddevs)):
+        fig, axs = plt.subplots(5,2)
+        fig.suptitle("Initial stddev = {}".format(stddevs[p]), fontsize=16)
+        svds = [20, 25, 30, 35, 40, 45, 50, 55, 70, 100]
+        row = 0
+        col = 0
+        for s in range(10):
+            adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True,
+                                    iters=10, svd_thresh=svds[s])
 
+            # Pose error
+            x_err = []
+            y_err = []
+            z_err = []
+            roll_err = []
+            pitch_err = []
+            yaw_err = []
+            x_init = []
+            y_init = []
+            z_init = []
+            roll_init = []
+            pitch_init = []
+            yaw_init = []
+            # landmark error
+            range_err = []
+            bearing_err = []
+            phi_err = []
+            for i in range(N):
+                Xb_true, Xb = create_random_poses(rot_stddev, pos_stddev)
+                landmarks = create_landmarks(9, Xb_true, Xb)
+                try:
+                    state, relative_pose, phis = adjuster.compute_constraint(landmarks,
+                                                                            stddevs[p],
+                                                                            stddevs[p])
+                except TypeError:
+                    continue
+                # Translation error
+                x_err.append(np.linalg.norm(Xb_true[0,-1] - relative_pose[0,-1]))
+                y_err.append(np.linalg.norm(Xb_true[1,-1] - relative_pose[1,-1]))
+                z_err.append(np.linalg.norm(Xb_true[2,-1] - relative_pose[2,-1]))
+                # Rotation error
+                roll, pitch, yaw = tf.transformations.euler_from_matrix(Xb_true)
+                roll_est, pitch_est, yaw_est = tf.transformations.euler_from_matrix(relative_pose)
+                yaw_err.append(np.linalg.norm(yaw - yaw_est))
+                pitch_err.append(np.linalg.norm(pitch - pitch_est))
+                roll_err.append(np.linalg.norm(roll - roll_est))
+                # Initial error
+                roll_, pitch_, yaw_ = tf.transformations.euler_from_matrix(Xb)
+                x_init.append(np.linalg.norm(Xb_true[0,-1] - Xb[0,-1]))
+                y_init.append(np.linalg.norm(Xb_true[1,-1] - Xb[1,-1]))
+                z_init.append(np.linalg.norm(Xb_true[2,-1] - Xb[2,-1]))
+                yaw_init.append(np.linalg.norm(yaw - yaw_))
+                pitch_init.append(np.linalg.norm(pitch - pitch_))
+                roll_init.append(np.linalg.norm(roll - roll_))
+
+                k = 0
+                for j,l in enumerate(landmarks):
+                    polar = l.polar_img1
+                    bearing_err.append(np.linalg.norm(state[12+k,0] - polar[0,0]))
+                    range_err.append(np.linalg.norm(state[12+k+1,0] - polar[1,0]))
+                    phi_err.append(np.linalg.norm(phis[j] - l.real_phi))
+                    k += 2
+
+            X = [x_init, x_err]
+            Y = [y_init, y_err]
+            Z = [z_init, z_err]
+            Roll = [roll_init, roll_err]
+            Pitch = [pitch_init, pitch_err]
+            Yaw = [yaw_init, yaw_err]
+            # Box plot for pose
+            axs[row, col].set_title("Absolute Error for Estimated Pose (SVD={})".format(svds[s]))
+            labels = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw']
+            bplot1 = axs[row, col].boxplot(X, positions=[1,2], notch=True, sym='rx', widths=0.6, patch_artist=True)
+            setBoxColors(bplot1)
+            bplot2 = axs[row, col].boxplot(Y, positions=[4,5], notch=True, sym='rx', widths=0.6, patch_artist=True)
+            setBoxColors(bplot2)
+            bplot3 = axs[row, col].boxplot(Z, positions=[7,8], notch=True, sym='rx', widths=0.6, patch_artist=True)
+            setBoxColors(bplot3)
+            bplot4 = axs[row, col].boxplot(Roll, positions=[10,11], notch=True, sym='rx', widths=0.6, patch_artist=True)
+            setBoxColors(bplot4)
+            bplot5 = axs[row, col].boxplot(Pitch, positions=[13,14], notch=True, sym='rx', widths=0.6, patch_artist=True)
+            setBoxColors(bplot5)
+            bplot6 = axs[row, col].boxplot(Yaw, positions=[16,17], notch=True, sym='rx', widths=0.6, patch_artist=True)
+            setBoxColors(bplot6)
+            axs[row, col].yaxis.grid(True)
+            axs[row, col].set_xticklabels(labels)
+            axs[row, col].set_xticks([1.5, 4.5, 7.5, 10.5, 13.5, 16.5])
+            axs[row, col].set_xlim(0,18)
+            hB, = plt.plot([0,0], 'bs')
+            hR, = plt.plot([0,0], 'rs')
+            plt.legend((hB,hR), ('Initial', 'Proposed'))
+            hB.set_visible(False)
+            hR.set_visible(False)
+
+            row += 1
+            if row == 5:
+                row = 0
+                col = 1
+
+
+def random_test(N, rot_stddev, pos_stddev, M, iters, svd):
+    """
+    Run the bundle adjustment framework N times with random poses and landmarks.
+    Computes the error and plots the relevant data to evaluate the performance.
+    """
+    adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True,
+                            iters=iters, svd_thresh=svd)
     # Pose error
     x_err = []
     y_err = []
@@ -583,11 +699,11 @@ def random_test(N, rot_stddev, pos_stddev):
     phi_err = []
     for i in range(N):
         Xb_true, Xb = create_random_poses(rot_stddev, pos_stddev)
-        landmarks = create_landmarks(9, Xb_true, Xb)
+        landmarks = create_landmarks(M, Xb_true, Xb)
         try:
             state, relative_pose, phis = adjuster.compute_constraint(landmarks)
-                                                                     # rot_stddev,
-                                                                     # pos_stddev)
+                                                                    # rot_stddev,
+                                                                    # pos_stddev)
         except TypeError:
             continue
         # Translation error
@@ -623,42 +739,79 @@ def random_test(N, rot_stddev, pos_stddev):
     Roll = [roll_init, roll_err]
     Pitch = [pitch_init, pitch_err]
     Yaw = [yaw_init, yaw_err]
+    fig, axs = plt.subplots()
     # Box plot for pose
-    fig = plt.figure()
-    ax1 = plt.subplot()
-    ax1.set_title("Absolute Error for Estimated Pose")
+    fig.suptitle(r"Absolute Pose Error ($\sigma = {}$)".format(pos_stddev), fontsize=16)
     labels = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw']
-    bplot1 = ax1.boxplot(X, positions=[1,2], notch=True, sym='rx', widths=0.6, patch_artist=True)
+    bplot1 = axs.boxplot(X, positions=[1,2], notch=True, sym='rx', widths=0.6, patch_artist=True)
     setBoxColors(bplot1)
-    bplot2 = ax1.boxplot(Y, positions=[4,5], notch=True, sym='rx', widths=0.6, patch_artist=True)
+    bplot2 = axs.boxplot(Y, positions=[4,5], notch=True, sym='rx', widths=0.6, patch_artist=True)
     setBoxColors(bplot2)
-    bplot3 = ax1.boxplot(Z, positions=[7,8], notch=True, sym='rx', widths=0.6, patch_artist=True)
+    bplot3 = axs.boxplot(Z, positions=[7,8], notch=True, sym='rx', widths=0.6, patch_artist=True)
     setBoxColors(bplot3)
-    bplot4 = ax1.boxplot(Roll, positions=[10,11], notch=True, sym='rx', widths=0.6, patch_artist=True)
+    bplot4 = axs.boxplot(Roll, positions=[10,11], notch=True, sym='rx', widths=0.6, patch_artist=True)
     setBoxColors(bplot4)
-    bplot5 = ax1.boxplot(Pitch, positions=[13,14], notch=True, sym='rx', widths=0.6, patch_artist=True)
+    bplot5 = axs.boxplot(Pitch, positions=[13,14], notch=True, sym='rx', widths=0.6, patch_artist=True)
     setBoxColors(bplot5)
-    bplot6 = ax1.boxplot(Yaw, positions=[16,17], notch=True, sym='rx', widths=0.6, patch_artist=True)
+    bplot6 = axs.boxplot(Yaw, positions=[16,17], notch=True, sym='rx', widths=0.6, patch_artist=True)
     setBoxColors(bplot6)
-    ax1.yaxis.grid(True)
-    ax1.set_xticklabels(labels)
-    ax1.set_xticks([1.5, 4.5, 7.5, 10.5, 13.5, 16.5])
-    plt.xlim(0,18)
+    axs.yaxis.grid(True)
+    axs.set_xticklabels(labels)
+    axs.set_ylabel("Error [m] or [rad]")
+    axs.set_xticks([1.5, 4.5, 7.5, 10.5, 13.5, 16.5])
+    axs.set_xlim(0,18)
+    axs.set_ylim(0,0.2)
+    hB, = plt.plot([0,0], 'bs')
+    hR, = plt.plot([0,0], 'rs')
+    plt.legend((hB,hR), ('Initial', 'Proposed'))
+    hB.set_visible(False)
+    hR.set_visible(False)
 
-    # data = [range_err, bearing_err, phi_err]
-    # ax2 = plt.subplot(122)
-    # ax2.set_title("Absolute Error for Estimated Landmarks")
-    # labels = ['Range', 'Bearing', 'Elevation']
-    # bplot2 = ax2.boxplot(data, notch=True, sym='rx', labels=labels, patch_artist=True)
-    # colors = ['pink', 'lightblue', 'lightgreen']
-    # for box in bplot2:
-        # for patch, color in zip(bplot2['boxes'], colors):
-            # patch.set_facecolor(color)
-            # patch.set(linewidth=2)
-    # for whisker in bplot2['whiskers']:
-        # whisker.set(linewidth=2)
-    # for median in bplot2['medians']:
-        # median.set(linewidth=2)
-    # for cap in bplot2['caps']:
-        # cap.set(linewidth=2)
-    # ax2.yaxis.grid(True)
+def random_test_landmarks(N, rot_stddev, pos_stddev, M, iters, svd):
+    """
+    Run the bundle adjustment framework N times with random poses and landmarks.
+    Computes the error and plots the relevant data to evaluate the performance.
+    """
+    adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True,
+                            iters=iters, svd_thresh=svd)
+    # Pose error
+    # landmark error
+    range_err = []
+    bearing_err = []
+    phi_err = []
+    for i in range(N):
+        Xb_true, Xb = create_random_poses(rot_stddev, pos_stddev)
+        landmarks = create_landmarks(M, Xb_true, Xb)
+        try:
+            state, relative_pose, phis = adjuster.compute_constraint(landmarks)
+                                                                    # rot_stddev,
+                                                                    # pos_stddev)
+        except TypeError:
+            continue
+
+        k = 0
+        for j,l in enumerate(landmarks):
+            polar = l.polar_img1
+            bearing_err.append(np.linalg.norm(state[12+k,0] - polar[0,0]))
+            range_err.append(np.linalg.norm(state[12+k+1,0] - polar[1,0]))
+            phi_err.append(np.linalg.norm(phis[j] - l.real_phi))
+            k += 2
+
+    data = [range_err, bearing_err, phi_err]
+    fig, ax2 = plt.subplots()
+    fig.suptitle(r"Absolute Landmark Error ($\sigma = {}$)".format(pos_stddev), fontsize=16)
+    labels = ['Range', 'Bearing', 'Elevation']
+    bplot2 = ax2.boxplot(data, notch=True, sym='rx', labels=labels, patch_artist=True)
+    colors = ['pink', 'lightblue', 'lightgreen']
+    for box in bplot2:
+        for patch, color in zip(bplot2['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set(linewidth=2)
+    for whisker in bplot2['whiskers']:
+        whisker.set(linewidth=2)
+    for median in bplot2['medians']:
+        median.set(linewidth=2)
+    for cap in bplot2['caps']:
+        cap.set(linewidth=2)
+    ax2.yaxis.grid(True)
+

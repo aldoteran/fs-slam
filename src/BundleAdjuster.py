@@ -29,7 +29,7 @@ class BundleAdjuster:
     TBA
     """
     def __init__(self, verbose=True, test=False, debug=False,
-                 benchmark=False, condition=100.0, iters=5):
+                 benchmark=False, iters=5, svd_thresh=50):
         # Flags
         self.is_test = test
         self.is_debug = debug
@@ -37,10 +37,12 @@ class BundleAdjuster:
         self.is_singular = False
         self.verbose = verbose
 
-        self.iters = iters
-        self.target_condition = condition
+        # GN params
         # TODO(aldoteran): add this to the config file
-        self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        self.iters = iters
+        self.svd_threshold = svd_thresh
+        # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
         self.pointcloud = [[],[],[]]
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -61,7 +63,7 @@ class BundleAdjuster:
         self.tf_pub = tf.TransformBroadcaster()
         # self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
 
-    def compute_constraint(self, landmarks, theta_stddev=0.05, range_stddev=0.05):
+    def compute_constraint(self, landmarks, theta_stddev=0.01, range_stddev=0.01):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -85,12 +87,13 @@ class BundleAdjuster:
         x_init, z_a, z_b = self._init_state(landmarks, Xb, T_Xb, N)
 
         #for debugging
-        delta_norm_vector = []
+        delta_norm_vector = [0.5]
         if self.is_test:
             fig, ax_3d, axs = utils.init_all_plots()
             phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx, \
                 q_proj_x, q_proj_y, q_proj_z = self._opt_phi_search(axs, x_init, z_b, T_Xb, sigma, N, landmarks)
-        phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
+        else:
+            phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
         # phis = [l.real_phi for l in landmarks]
 
         # for debugging
@@ -99,7 +102,10 @@ class BundleAdjuster:
                                         phi_proj_y, phi_proj_z, Xa, Xb, best_idx)
 
         # Stop condition
-        epsilon = 0.001
+        epsilon = 0.01
+
+        #for debugging
+        cond_nums = []
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
@@ -108,9 +114,12 @@ class BundleAdjuster:
             b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
 
             # (3) SVD of A and thresholding of singular values
-            U, S, V = np.linalg.svd(A, full_matrices=False)
-            print(S)
-            S[S<5.0] = 0.0
+            try:
+                U, S, V = np.linalg.svd(A, full_matrices=False)
+            except:
+                return
+            S[S<self.svd_threshold] = 0.0
+            cond_nums.append(np.max(S)/np.min(S[np.nonzero(S)]))
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
@@ -118,10 +127,16 @@ class BundleAdjuster:
             delta_norm = np.linalg.norm(delta)
 
             #for debugging
-            delta_norm_vector.append(delta_norm)
             x_init += delta
             T_Xb = self._update_transform(Xa, x_init)
-            print(delta_norm)
+
+            if self.is_test:
+                # for debugging
+                utils.update_pose(fig, ax_3d, T_Xb, landmarks)
+
+            if delta_norm > delta_norm_vector[-1]:
+                return
+            delta_norm_vector.append(delta_norm)
 
             # (5) Check if converged
             if self.verbose:
@@ -129,11 +144,15 @@ class BundleAdjuster:
             if delta_norm < epsilon or it >= self.iters:
                 break
 
-        print('------------ NEXT ITER ------------')
         covariance = self._get_sqrt_information(A_d)
         if self.is_singular:
             self.is_singular = False
             return
+
+        #for debugging
+        import matplotlib.pyplot as plt
+        # plt.plot(cond_nums)
+        plt.plot(delta_norm_vector)
 
         # Return the sate if in test mode
         if self.is_test:
@@ -171,7 +190,6 @@ class BundleAdjuster:
         return (x, z_a, z_b)
 
     def _opt_phi_search(self, x, z_b, T_Xb, sigma, N, landmarks):
-    # def _opt_phi_search(self, axs, x, z_b, T_Xb, sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -234,9 +252,9 @@ class BundleAdjuster:
                     best_idx = i/2
             # for debugging
             if self.is_test:
-                utils.plot_single_search(landmarks[i/2], polar, T_Xb, best_phi,
-                                        old_error, rep_error, phi_x, phi_y, phi_z,
-                                        q_x, q_y, q_z, self.phi_range, best_idx)
+                # utils.plot_single_search(landmarks[i/2], polar, T_Xb, best_phi,
+                                        # old_error, rep_error, phi_x, phi_y, phi_z,
+                                        # q_x, q_y, q_z, self.phi_range, best_idx)
                 # utils.plot_rep_error(axs, j, k, rep_error, old_error, best_phi,
                                     # landmarks[i/2].real_phi, self.phi_range, i/2)
                 k += 1
