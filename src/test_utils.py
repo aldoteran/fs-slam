@@ -697,15 +697,17 @@ def random_test(N, rot_stddev, pos_stddev, M, iters, svd):
     range_err = []
     bearing_err = []
     phi_err = []
+    ax11 = plt.subplot()
     for i in range(N):
         Xb_true, Xb = create_random_poses(rot_stddev, pos_stddev)
         landmarks = create_landmarks(M, Xb_true, Xb)
         try:
-            state, relative_pose, phis = adjuster.compute_constraint(landmarks)
+            state, relative_pose, phis, cond_nums = adjuster.compute_constraint(landmarks)
                                                                     # rot_stddev,
                                                                     # pos_stddev)
         except TypeError:
             continue
+        ax11.plot(cond_nums)
         # Translation error
         x_err.append(np.linalg.norm(Xb_true[0,-1] - relative_pose[0,-1]))
         y_err.append(np.linalg.norm(Xb_true[1,-1] - relative_pose[1,-1]))
@@ -779,15 +781,17 @@ def random_test_landmarks(N, rot_stddev, pos_stddev, M, iters, svd):
     range_err = []
     bearing_err = []
     phi_err = []
+    fig2, ax11 = plt.subplot()
     for i in range(N):
         Xb_true, Xb = create_random_poses(rot_stddev, pos_stddev)
         landmarks = create_landmarks(M, Xb_true, Xb)
         try:
-            state, relative_pose, phis = adjuster.compute_constraint(landmarks)
+            state, relative_pose, phis, cond_nums = adjuster.compute_constraint(landmarks)
                                                                     # rot_stddev,
                                                                     # pos_stddev)
         except TypeError:
             continue
+        ax11.scatter(cond_nums)
 
         k = 0
         for j,l in enumerate(landmarks):

@@ -118,7 +118,10 @@ class BundleAdjuster:
                 U, S, V = np.linalg.svd(A, full_matrices=False)
             except:
                 return
-            S[S<self.svd_threshold] = 0.0
+            s_list = [np.max(S)/s for s in S]
+            thresh = np.argmin((np.asarray(s_list)/30.0 - 1)**2)
+            S[S<S[thresh]] = 0.0
+            # S[S<self.svd_threshold] = 0.0
             cond_nums.append(np.max(S)/np.min(S[np.nonzero(S)]))
 
             # (4) Update initial state
@@ -151,7 +154,6 @@ class BundleAdjuster:
 
         #for debugging
         import matplotlib.pyplot as plt
-        # plt.plot(cond_nums)
         plt.plot(delta_norm_vector)
 
         # Return the sate if in test mode
@@ -163,7 +165,7 @@ class BundleAdjuster:
                     phi_proj_x, phi_proj_y, phi_proj_z,
                     covariance, best_idx)
         if self.is_benchmark:
-            return (x_init, T_Xb, phis)
+            return (x_init, T_Xb, phis, cond_nums)
 
         # Publish everything
         if self.verbose:
