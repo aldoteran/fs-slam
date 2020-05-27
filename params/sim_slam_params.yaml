@@ -4,7 +4,7 @@
 node_loop_rate: 50
 
 # Topic in which the IMU measurements are being received.
-imu_meas_topic: /imu/data
+imu_meas_topic: rexrov/imu
 
 # Measurement noise characteristics:
 # --Prior factors:

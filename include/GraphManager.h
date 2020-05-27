@@ -148,8 +148,9 @@ class GraphManager {
   //! Sonar extrinsics base (imu) link to sonar optical frame.
   // TODO(aldoteran): move this to config file
   gtsam::Point3 sonar_trans = gtsam::Point3(1.3, 0.0, -0.7);
-  gtsam::Rot3 sonar_rot = gtsam::Rot3(0.000778532, 0.977653929,
-                                      0.0001674033,-0.210219314);
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(0.000778532, 0.977653929,
+                                      //0.0001674033,-0.210219314);
+  gtsam::Rot3 sonar_rot = gtsam::Rot3(1.3267949e-6, 1.0, 0.0, 0.0);
   gtsam::Pose3 sonar_extrinsics_ = gtsam::Pose3(sonar_rot, sonar_trans);
 
   /// Odometer for IMU preintegration between keyframes.
