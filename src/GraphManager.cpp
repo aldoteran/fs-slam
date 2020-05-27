@@ -96,11 +96,11 @@ void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
     // Save initial state
     initial_state_ = gtsam::NavState(pose, gtsam::Vector3(0,0,0));
     gtsam::Pose3 sonar_init_pose = pose * sonar_extrinsics_;
-    std::cout << " ---------- Graph Priors ----------- " << std::endl;
-    std::cout << "IMU Initial Pose" << std::endl;
-    std::cout << pose << std::endl;
-    std::cout << "Sonar Initial Pose" << std::endl;
-    std::cout << sonar_init_pose << std::endl;
+    //std::cout << " ---------- Graph Priors ----------- " << std::endl;
+    //std::cout << "IMU Initial Pose" << std::endl;
+    //std::cout << pose << std::endl;
+    //std::cout << "Sonar Initial Pose" << std::endl;
+    //std::cout << sonar_init_pose << std::endl;
 
     // Add prior factor to graph.
     graph_.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), pose,
@@ -158,8 +158,8 @@ void GraphManager::AddImuMeasurement(const Eigen::Vector3d &accel,
 Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
                                          gtsam::Matrix66 R) {
     // This function will be triggered by the sonar pose constraint callback
-    std::cout << " ---------- Running iSAM for frame: " << cur_frame_;
-    std::cout << " ----------" << std::endl;
+    //std::cout << " ---------- Running iSAM for frame: " << cur_frame_;
+    //std::cout << " ----------" << std::endl;
 
     // Sonar constraint Covariance
     sonar_covariance_ = gtsam::noiseModel::Gaussian::Covariance(R);
@@ -182,16 +182,16 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     initial_estimates_.insert(S(cur_frame_), prev_pose.compose(sonar_constraint)
                                              * sonar_extrinsics_);
 
-    std::cout << "Preintegrated Estimate" << std::endl;
-    std::cout << prop_state << std::endl;
-    std::cout << "ISAM2 Previous Estimate" << std::endl;
-    std::cout << prev_pose << std::endl;
-    std::cout << "Composed Pose" << std::endl;
-    std::cout << prev_pose.compose(sonar_constraint) << std::endl;
-    std::cout << "Estimated Sonar Pose" << std::endl;
-    std::cout << prev_pose.compose(sonar_constraint)*sonar_extrinsics_ << std::endl;
-    std::cout << "Estimated IMU Bias" << std::endl;
-    std::cout << cur_imu_bias_ << std::endl;
+    //std::cout << "Preintegrated Estimate" << std::endl;
+    //std::cout << prop_state << std::endl;
+    //std::cout << "ISAM2 Previous Estimate" << std::endl;
+    //std::cout << prev_pose << std::endl;
+    //std::cout << "Composed Pose" << std::endl;
+    //std::cout << prev_pose.compose(sonar_constraint) << std::endl;
+    //std::cout << "Estimated Sonar Pose" << std::endl;
+    //std::cout << prev_pose.compose(sonar_constraint)*sonar_extrinsics_ << std::endl;
+    //std::cout << "Estimated IMU Bias" << std::endl;
+    //std::cout << cur_imu_bias_ << std::endl;
 
     // Add IMU factor
     gtsam::CombinedImuFactor imu_factor(X(cur_frame_ - 1), V(cur_frame_ -1),
@@ -224,8 +224,8 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
 
     // Reset odometer with new bias estimate
     odometer_->resetIntegrationAndSetBias(cur_imu_bias_);
-    std::cout << "ISAM2 Optimized Estimate" << std::endl;
-    std::cout << cur_state_estimate_ << std::endl;
+    //std::cout << "ISAM2 Optimized Estimate" << std::endl;
+    //std::cout << cur_state_estimate_ << std::endl;
 
     // Reset factor graph
     graph_.resize(0);

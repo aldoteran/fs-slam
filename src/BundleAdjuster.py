@@ -16,9 +16,6 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from geometry_msgs.msg import PoseWithCovariance, PoseStamped
 from sensor_msgs.msg import PointCloud2
 
-# for debugging
-import test_utils as utils
-
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
 __author_email__ = "aldot@kth.se, teran@mit.edu"
@@ -29,7 +26,7 @@ class BundleAdjuster:
     TBA
     """
     def __init__(self, verbose=True, test=False, debug=False,
-                 benchmark=False, iters=10, svd_thresh=50):
+                 benchmark=False, iters=10, svd_thresh=60):
         # Flags
         self.is_test = test
         self.is_debug = debug
@@ -41,8 +38,8 @@ class BundleAdjuster:
         # TODO(aldoteran): add this to the config file
         self.iters = iters
         self.svd_threshold = svd_thresh
-        self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
-        # self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
+        # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        self.phi_range = np.arange(-0.1047, 0.1047, 0.017)
         self.pointcloud = [[],[],[]]
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -61,9 +58,8 @@ class BundleAdjuster:
                                        PointCloud2,
                                        queue_size=1)
         self.tf_pub = tf.TransformBroadcaster()
-        # self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
 
-    def compute_constraint(self, landmarks, theta_stddev=0.01, range_stddev=0.01):
+    def compute_constraint(self, landmarks, theta_stddev=1, range_stddev=1):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -90,7 +86,7 @@ class BundleAdjuster:
         # phis = [l.real_phi for l in landmarks]
 
         # Stop condition
-        epsilon = 0.01
+        epsilon = 0.005
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
@@ -100,7 +96,10 @@ class BundleAdjuster:
 
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            S[S<self.svd_threshold] = 0.0
+            cond_nums = [np.max(S)/s for s in S]
+            tresh = np.argmin((np.asarray(cond_nums)/10.0 - 1)**2)
+            S[S<S[tresh]] = 0.0
+            print(np.max(S)/np.min(S[np.nonzero(S)]))
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
@@ -124,6 +123,7 @@ class BundleAdjuster:
         # self._publish_pose(x_init, sigma, covariance)
         # self._publish_true_odom(Xb)
         # self._publish_pointcloud(x_init, phis)
+
 
     def _init_state(self, landmarks, Xb, T_Xb, N):
         x = np.zeros((12+2*N, 1))
@@ -404,7 +404,7 @@ class BundleAdjuster:
         p = [1,2,0]
         pointcloud = [[], [], []]
         # Append points to cloud
-        for j,i in enumerate(range(6,state.shape[0],2)):
+        for j,i in enumerate(range(12,state.shape[0],2)):
             cart = self.polar_to_cart(np.array([[state[i,0]],
                                                 [state[i+1,0]],
                                                 [phis[j]]]))

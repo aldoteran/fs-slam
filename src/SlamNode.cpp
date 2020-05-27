@@ -135,8 +135,8 @@ void SlamNode::SonarPoseCallback(
                       cov[24], cov[25], cov[26], cov[27], cov[28], cov[29],
                       cov[30], cov[31], cov[32], cov[33], cov[34], cov[35];
         ROS_WARN("Adding sonar pose constraint to graph.");
-        std::cout << "Rotation:" << rotation.matrix() << std::endl;
-        std::cout << "Translation:" << position << std::endl;
+        //std::cout << "Rotation:" << rotation.matrix() << std::endl;
+        //std::cout << "Translation:" << position << std::endl;
         // Update iSAM and get optimized pose
         Eigen::Affine3d opt_pose = gm_->AddFactors(
                 gtsam::Pose3(rotation, position), covariance);
