@@ -15,9 +15,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from geometry_msgs.msg import PoseWithCovariance, PoseStamped
 from sensor_msgs.msg import PointCloud2
-
-# for debugging
-import test_utils as utils
+from std_msgs.msg import Float32MultiArray
 
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
@@ -39,7 +37,8 @@ class BundleAdjuster:
         self.iters = iters
         self.target_condition = condition
         # TODO(aldoteran): add this to the config file
-        self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        self.phi_range = np.arange(-0.1047, 0.1047, 0.017453)
         self.pointcloud = [[],[],[]]
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -57,10 +56,12 @@ class BundleAdjuster:
         self.pc2_pub = rospy.Publisher('bundle_adjustment/landmark_cloud',
                                        PointCloud2,
                                        queue_size=1)
+        self.degeneracy_pub = rospy.Publisher('bundle_adjustment/degeneracy_factors',
+                                              Float32MultiArray,
+                                              queue_size=1)
         self.tf_pub = tf.TransformBroadcaster()
-        # self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
 
-    def compute_constraint(self, landmarks, theta_stddev=0.05, range_stddev=0.05):
+    def compute_constraint(self, landmarks, theta_stddev=0.005, range_stddev=0.005):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -80,25 +81,14 @@ class BundleAdjuster:
         N = len(landmarks)
         Xb = landmarks[0].Xb
         Xa = landmarks[0].Xa
-        T_Xb = np.linalg.inv(Xa).dot(Xb)
+        T_Xb = landmarks[0].rel_pose
         x_init, z_a, z_b = self._init_state(landmarks, Xb, T_Xb, N)
 
-        #for debugging
-        delta_norm_vector = []
-        phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx = self._opt_phi_search(x_init,
-                                                                                  z_b,
-                                                                                  T_Xb,
-                                                                                  sigma, N,
-                                                                                  landmarks)
         # phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
-        # phis = [l.real_phi for l in landmarks]
-
-        # for debugging
-        fig, ax = utils.init_plot(x_init, landmarks, phis, phi_proj_x,
-                                  phi_proj_y, phi_proj_z, Xa, Xb, best_idx)
+        phis = [l.real_phi for l in landmarks]
 
         # Stop condition
-        epsilon = 0.001
+        epsilon = 0.01
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
@@ -108,20 +98,18 @@ class BundleAdjuster:
 
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            S[S<50] = 0.0
+            cond_nums = [np.max(S)/s for s in S]
+            thresh = np.argmin((np.asarray(cond_nums)/8.0 - 1)**2)
+            import pdb
+            pdb.set_trace()
+            S[S<S[thresh]] = 0.0
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
             delta = np.linalg.pinv(A_d).dot(b)
             delta_norm = np.linalg.norm(delta)
-
-            #for debugging
-            delta_norm_vector.append(delta_norm)
             x_init += delta
             T_Xb = self._update_transform(Xa, x_init)
-
-            # for debugging
-            utils.plot_pose(fig, ax, T_Xb)
 
             # (5) Check if converged
             if self.verbose:
@@ -133,19 +121,14 @@ class BundleAdjuster:
         if self.is_singular:
             self.is_singular = False
             return
-        # Return the sate if in test mode
-        if self.is_test:
-            return (x_init, T_Xb, phis, S, delta_norm_vector,
-                    phi_proj_x, phi_proj_y, phi_proj_z,
-                    covariance, best_idx)
         # Publish everything
         if self.verbose:
             rospy.loginfo("Resulting relative pose:\n{}".format(T_Xb))
             rospy.loginfo("Resulting covariance matrix:\n{}".format(covariance))
         self._publish_pose_constraint(T_Xb, covariance)
-        self._publish_pose(x_init, sigma, covariance)
-        self._publish_true_odom(Xb)
-        self._publish_pointcloud(x_init, phis)
+        # self._publish_pose(x_init, sigma, covariance)
+        # self._publish_true_odom(Xb)
+        # self._publish_pointcloud(x_init, phis)
 
     def _init_state(self, landmarks, Xb, T_Xb, N):
         """
@@ -179,7 +162,7 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, sigma, N, landmarks):
+    def _opt_phi_search(self, x, z_b, T_Xb, inv_sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -187,46 +170,21 @@ class BundleAdjuster:
         trans_Xb = T_Xb[:-1,-1:]
         phis = []
 
-        # for debugging
-        phi_proj_x = []
-        phi_proj_y = []
-        phi_proj_z = []
-
         for i in range(0,2*N,2):
             best_phi = 0.0
             old_error = 9999
             z_bi = z_b[i:i+2,:]
             polar = x[6+i:6+i+2,:]
-            # debugging
-            rep_error = []
-            p_x = []
-            p_y = []
-            p_z = []
             for phi in self.phi_range:
-                # debugging
-                p_i = self._project_coords(polar, phi)
-                p_x.append(p_i[0,0])
-                p_y.append(p_i[1,0])
-                p_z.append(p_i[2,0])
                 q_i = rot_Xb.transpose().dot(self._project_coords(polar, phi) - trans_Xb)
-                # for debugging
-                phi_proj_x.append(q_i[0,0])
-                phi_proj_y.append(q_i[1,0])
-                phi_proj_z.append(q_i[2,0])
                 innov = self.cart_to_polar(q_i) - z_bi
-                error = innov.transpose().dot(np.linalg.inv(sigma)).dot(innov)
-                # for debugging
-                rep_error.append(error[0,0])
+                error = innov.transpose().dot(inv_sigma).dot(innov)
                 if error < old_error:
                     best_phi = phi
                     old_error = error
-                    # for debugging
-                    best_idx = i/2
             phis.append(best_phi)
 
-        # return phis
-        #for debugging
-        return (phis, phi_proj_x, phi_proj_y, phi_proj_z, best_idx)
+        return phis
 
     def _project_coords(self, polar, phi):
         """
@@ -288,9 +246,12 @@ class BundleAdjuster:
                             [q[0,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
                                 q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
                                 q[2,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2)]])
-            q_xb = np.array([[0.0, -q[2,0], q[1,0]],
-                             [q[2,0], 0.0, -q[0,0]],
-                             [-q[1,0], q[0,0], 0.0]])
+            q_xb = np.array([[0.0, -q[0,0], q[1,0]],
+                             [q[0,0], 0.0, -q[2,0]],
+                             [-q[1,0], q[2,0], 0.0]])
+            # q_xb = np.array([[0.0, -q[2,0], q[1,0]],
+                             # [q[2,0], 0.0, -q[0,0]],
+                             # [-q[1,0], q[0,0], 0.0]])
             H_B[i:i+2,0:6] = zhat_q.dot(np.hstack((q_xb, -np.eye(3))))
 
             q_p = T_Xb[:-1, :-1].transpose()

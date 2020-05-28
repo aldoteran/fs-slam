@@ -15,9 +15,9 @@ prior_pos_stddev: 0.0001
 prior_rot_stddev: 0.000001
 # --IMU measurements:
 # Standard deviation for the linear acceleration measurements [???].
-imu_accel_stddev: 5.0e-4
+iccel_stddev: 16.0e-3
 # Standard deviation for the angular velocity measurements [???].
-imu_omega_stddev: 9.6962e-6
+imu_omega_stddev: 0.02475
 # Measurement frequency [Hz].
 imu_frequency: 50.0
 

@@ -63,8 +63,8 @@ class Landmark:
             # measurements in polar coordinates
             self.polar_img1 = self.cart_to_polar(self.cart_img1)
             # TODO(aldoteran): check if simulated measurements can be fixed
-            # self.polar_img2 = self.cart_to_noisy_polar(self.cart_img1, T_Xb)
-            self.polar_img2 = self.cart_to_polar(self.cart_img2)
+            self.polar_img2 = self.cart_to_noisy_polar(self.cart_img1, T_Xb)
+            # self.polar_img2 = self.cart_to_polar(self.cart_img2)
             # ground truth for phi, for debugging
             self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
             # relative pose between img1 and img2 T_Xb
@@ -144,8 +144,8 @@ class LandmarkDetector:
         img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
         img = np.uint8(255 * (img / np.max(img)))
         self.img_buff.append((img,msg.header.stamp,msg.header.seq))
-        if len(self.img_buff) >= self.BUFF_LEN:
-            self.img_buff.pop(-1)
+        # if len(self.img_buff) >= self.BUFF_LEN:
+            # self.img_buff.pop(-1)
 
     def _range_cb(self, msg):
         """
@@ -158,8 +158,8 @@ class LandmarkDetector:
                                    img[:,:,2],
                                    msg.header.stamp,
                                    msg.header.seq))
-        if len(self.cart_map_buff) >= self.BUFF_LEN:
-            self.cart_map_buff.pop(-1)
+        # if len(self.cart_map_buff) >= self.BUFF_LEN:
+            # self.cart_map_buff.pop(-1)
 
     def extract_n_match(self, imgs):
         """
@@ -221,35 +221,39 @@ class LandmarkDetector:
         :rtype: np.array (4,4)
         """
         sonar_frame = 'rexrov/sonar_pose'
+        # try:
+            # # self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
+                                                # # imgs[0][1], rospy.Duration(0.2))
+            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                # '/slam/optimized/sonar_pose',
+                                                                # imgs[0][1])
+            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                # '/slam/optimized/sonar_pose',
+                                                                # imgs[1][1])
+        # except:
+            # rospy.logwarn("Using IMU odometry instead of optimized pose.")
+        # try:
+            # # get poses and compute T_xb from the IMU odometry.
+            # self.tf_listener.waitForTransform('/world', '/slam/dead_reckoning/sonar_pose',
+                                                # imgs[1][1], rospy.Duration(0.2))
+            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                # '/slam/dead_reckoning/sonar_pose',
+                                                                # imgs[1][1])
+            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                # '/slam/dead_reckoning/sonar_pose',
+                                                                # imgs[0][1])
+        # except:
+            # return
+        # # self.is_init = True
+
+        # Xa = tf.transformations.quaternion_matrix(rot_Xa)
+        # Xa[:-1, -1] = np.asarray(trans_Xa)
+        # Xb = tf.transformations.quaternion_matrix(rot_Xb)
+        # Xb[:-1, -1] = np.asarray(trans_Xb)
+        # T_Xb = np.linalg.inv(Xa).dot(Xb)
+
+        # if self.is_verbose:
         try:
-            # self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
-                                                # imgs[0][1], rospy.Duration(0.2))
-            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                '/slam/optimized/sonar_pose',
-                                                                imgs[0][1])
-            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                '/slam/optimized/sonar_pose',
-                                                                imgs[1][1])
-        except:
-            rospy.logwarn("Using IMU odometry instead of optimized pose.")
-            # get poses and compute T_xb from the IMU odometry.
-            self.tf_listener.waitForTransform('/world', '/slam/dead_reckoning/sonar_pose',
-                                                imgs[1][1], rospy.Duration(0.2))
-            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                '/slam/dead_reckoning/sonar_pose',
-                                                                imgs[1][1])
-            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                '/slam/dead_reckoning/sonar_pose',
-                                                                imgs[0][1])
-        # self.is_init = True
-
-        Xa = tf.transformations.quaternion_matrix(rot_Xa)
-        Xa[:-1, -1] = np.asarray(trans_Xa)
-        Xb = tf.transformations.quaternion_matrix(rot_Xb)
-        Xb[:-1, -1] = np.asarray(trans_Xb)
-        T_Xb = np.linalg.inv(Xa).dot(Xb)
-
-        if self.is_verbose:
             trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
                                                                 sonar_frame,
                                                                 imgs[0][1])
@@ -267,11 +271,11 @@ class LandmarkDetector:
                                     imgs[1][1],
                                     "/Xb",
                                     "/rexrov/forward_sonar_optical_frame")
+        except:
+            return
 
-            if self.is_debug:
-                return (T_Xb_true, Xb_true, Xa_true)
-
-        return (T_Xb, Xb, Xa)
+        return (T_Xb_true, Xb_true, Xa_true)
+        # return (T_Xb, Xb, Xa)
         # for debugging
         # return (T_Xb, Xb, Xa, T_Xb_true, Xb_true, Xa_true)
 
@@ -290,9 +294,12 @@ class LandmarkDetector:
         :return: list of landmarks with updated elevation angle
         :rtype: list [Landmark_0,...,Landmark_N]
         """
-        T_Xb, Xb, Xa = self._relative_pose(imgs)
+        try:
+            T_Xb, Xb, Xa = self._relative_pose(imgs)
         # for debugging
-        # T_Xb, Xb, Xa, T_true, Xb_true, Xa_true = self._relative_pose(imgs)
+            # T_Xb, Xb, Xa, T_true, Xb_true, Xa_true = self._relative_pose(imgs)
+        except:
+            return
 
         self.landmarks = [Landmark(features[0], features[1], maps[0], maps[1],
                                    match[0].queryIdx, match[0].trainIdx,
@@ -309,7 +316,7 @@ class LandmarkDetector:
         dist_list = np.zeros(len(self.landmarks))
         for i in range(len(self.landmarks) - 1):
             dist_list[i] = np.linalg.norm(self.landmarks[i].polar_img1 - self.landmarks[i+1].polar_img1)
-        self.landmarks = np.asarray(self.landmarks)[dist_list > 0.5].tolist()
+        self.landmarks = np.asarray(self.landmarks)[dist_list > 0.30].tolist()
 
         return self.landmarks
 
