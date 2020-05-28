@@ -25,6 +25,7 @@
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/Image.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <std_msgs/Float32MultiArray.h>
 
 #include <iostream>
 
@@ -100,8 +101,18 @@ class SlamNode {
   //! Callback for the sonar image subscriber.
   void SonarPoseCallback(const geometry_msgs::PoseWithCovarianceStamped &msg);
 
+  //! Subscriber for the sonar pose from the bundle adjustment.
+  ros::Subscriber sonar_covariance_sub_;
+  //! Topic in which the sonar poses are being received.
+  std::string sonar_covariance_topic_ = "/bundle_adjustment/constraint_covariance";
+  //! Callback for the sonar image subscriber.
+  void SonarCovarianceCallback(const std_msgs::Float32MultiArray &msg);
+
   //! Initial state
   Eigen::Affine3d origin_;
+
+  //! Latest pose constraint
+  gtsam::Pose3 sonar_constraint_;
 
   //! Publisher for SLAM dead reckoning path.
   ros::Publisher dead_reckoning_pub_;

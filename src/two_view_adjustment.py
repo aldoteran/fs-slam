@@ -21,12 +21,12 @@ def main():
     rospy.init_node('two_view_sonar_adjustment')
     rospy.loginfo("Initializing Two-View sonar bundle adjustment.")
     detector = LandmarkDetector(verbose=is_verbose)
-    adjuster = BundleAdjuster(verbose=is_verbose, iters=1, svd_thresh=700)
+    adjuster = BundleAdjuster(verbose=is_verbose, iters=5, svd_thresh=700)
     rospy.sleep(0.5)
     # wait for buffer to fill up
     img2 = detector.img_buff.pop(0)
     maps_img2 = detector.cart_map_buff.pop(0)
-    rate = rospy.Rate(10)
+    rate = rospy.Rate(5)
     while not rospy.is_shutdown():
         tic = time.time()
         if len(detector.img_buff) == 0 or len(detector.cart_map_buff) == 0:
@@ -38,7 +38,7 @@ def main():
         features = detector.extract_n_match([img1, img2])
         landmarks = detector.generate_landmarks([img1, img2], features,
                                                 [maps_img1, maps_img2])
-        if landmarks == None:
+        if landmarks == None or len(landmarks) == 0:
             continue
         print(len(landmarks))
         adjuster.compute_constraint(landmarks)

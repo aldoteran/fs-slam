@@ -115,13 +115,13 @@ class GraphManager {
   gtsam::noiseModel::Diagonal::shared_ptr imu_noise_;
   gtsam::noiseModel::Diagonal::shared_ptr imu_bias_noise_;
   //! Standard deviation parameter for IMU's acceleration components.
-  const double imu_accel_stddev_ = 4e-3;  // [m/s2], from gazebo.
+  const double imu_accel_stddev_ = 16.0e-3;  // [m/s2], from gazebo.
   //! Standard deviation parameter for IMU's angular velocity components.
-  const double imu_omega_stddev_ = 3.39e-4;  // [rad/s], from gazebo.
+  const double imu_omega_stddev_ = 0.02476;  // [rad/s], from gazebo.
   //! Stddev for bias parameter for IMU's acceleration components.
-  const double imu_accel_bias_stddev_ = 6e-3; // [m/s2], from gazebo.
+  const double imu_accel_bias_stddev_ = 24.0e-3; // [m/s2], from gazebo.
   //! Stddev for bias parameter for IMU's angular velocity components.
-  const double imu_omega_bias_stddev_ = 3.87e-5; // [rad/s], from gazebo.
+  const double imu_omega_bias_stddev_ = 1.55e-4; // [rad/s], from gazebo.
 
   //! Setup iSAM's optimization and inference parameters.
   void SetupiSAM();

@@ -14,6 +14,7 @@ import ros_numpy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from geometry_msgs.msg import PoseWithCovariance, PoseStamped
+from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import PointCloud2
 
 __license__ = "MIT"
@@ -41,6 +42,7 @@ class BundleAdjuster:
         # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         self.phi_range = np.arange(-0.1047, 0.1047, 0.017)
         self.pointcloud = [[],[],[]]
+        self.degeneracy_factors = Float32MultiArray()
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
                                         PoseStamped,
@@ -57,9 +59,17 @@ class BundleAdjuster:
         self.pc2_pub = rospy.Publisher('bundle_adjustment/landmark_cloud',
                                        PointCloud2,
                                        queue_size=1)
+        self.cov_pub = rospy.Publisher('bundle_adjustment/constraint_covariance',
+                                        Float32MultiArray,
+                                        queue_size=1)
+        # for debugging
+        self.degeneracy_pub = rospy.Publisher('bundle_adjustment/degeneracy_factors',
+                                              Float32MultiArray,
+                                              queue_size=1)
+
         self.tf_pub = tf.TransformBroadcaster()
 
-    def compute_constraint(self, landmarks, theta_stddev=1, range_stddev=1):
+    def compute_constraint(self, landmarks, theta_stddev=0.01, range_stddev=0.01):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -90,16 +100,25 @@ class BundleAdjuster:
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
+            self.degeneracy_factors.data = [0.0, 0.0, N]
             # (2) Compute whitened Jacobian A and error vector b
             A = self._get_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
             b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
 
+            # for debugging
+            # vals, vectors = np.linalg.eig(A.transpose().dot(A))
+            # self.degeneracy_factors.data[0] = (np.min(vals[np.nonzero(vals)]) + 1)
+            # self.degeneracy_factors.data[1] = np.sqrt(np.min(vals[np.nonzero(vals)])/np.max(vals))
+            # self.degeneracy_pub.publish(self.degeneracy_factors)
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
+            self.degeneracy_factors.data[1] = S[-1]/S[0]
             cond_nums = [np.max(S)/s for s in S]
             tresh = np.argmin((np.asarray(cond_nums)/10.0 - 1)**2)
+            self.degeneracy_factors.data[0] = S[tresh]
             S[S<S[tresh]] = 0.0
-            print(np.max(S)/np.min(S[np.nonzero(S)]))
+            # print(np.max(S)/np.min(S[np.nonzero(S)]))
+            self.degeneracy_pub.publish(self.degeneracy_factors)
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
@@ -121,7 +140,7 @@ class BundleAdjuster:
             rospy.loginfo("Resulting relative pose:\n{}".format(T_Xb))
         self._publish_pose_constraint(T_Xb, covariance)
         # self._publish_pose(x_init, sigma, covariance)
-        # self._publish_true_odom(Xb)
+        self._publish_true_odom(Xb)
         # self._publish_pointcloud(x_init, phis)
 
 
@@ -401,14 +420,12 @@ class BundleAdjuster:
         :param state: Optimized state
         :type state: np.array (6+2N,1)
         """
-        p = [1,2,0]
         pointcloud = [[], [], []]
         # Append points to cloud
         for j,i in enumerate(range(12,state.shape[0],2)):
             cart = self.polar_to_cart(np.array([[state[i,0]],
                                                 [state[i+1,0]],
                                                 [phis[j]]]))
-            cart = cart[p]
             pointcloud[0].append(cart[0])
             pointcloud[1].append(cart[1])
             pointcloud[2].append(cart[2])
@@ -423,7 +440,7 @@ class BundleAdjuster:
         # Compose message and publish
         pc2_msg = ros_numpy.point_cloud2.array_to_pointcloud2(cloud_rarray,
                                                               rospy.Time.now(),
-                                                              '/rexrov/forward_sonar_optical_frame')
+                                                              '/slam/optimized/sonar_pose')
         self.pc2_pub.publish(pc2_msg)
 
     def normalize_quat(self,quat):

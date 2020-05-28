@@ -213,7 +213,7 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     // Update ISAM2
     isam2_.update(graph_, initial_estimates_);
 
-    for(int k = 0; k < 3; k++)
+    for(int k = 0; k < 2; k++)
         isam2_.update();
     gtsam::Values results = isam2_.calculateEstimate();
 

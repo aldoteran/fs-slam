@@ -51,6 +51,9 @@ void SlamNode::SetupRos() {
   // Subscribe to the sonar bundle adjustment pose constraint topic
   sonar_pose_sub_ =
       nh_.subscribe(sonar_pose_topic_, 1000, &SlamNode::SonarPoseCallback, this);
+  // Subscriber for the pose constraint covariance
+  sonar_covariance_sub_ =
+      nh_.subscribe(sonar_covariance_topic_, 1000, &SlamNode::SonarCovarianceCallback, this);
 
   // Setup the static SLAM path publisher for dead reckoned trajectory.
   dead_reckoning_pub_ =
@@ -145,6 +148,36 @@ void SlamNode::SonarPoseCallback(
         PublishSonarTF();
         PublishTruePath();
     }
+}
+
+//void SlamNode::SonarPoseCallback(
+        //const geometry_msgs::PoseWithCovarianceStamped &msg) {
+    //if(gm_->isGraphInit()) {
+        //// Add Sonar pose constraint
+        //gtsam::Point3 position(msg.pose.pose.position.x,
+                               //msg.pose.pose.position.y,
+                               //msg.pose.pose.position.z);
+        //gtsam::Rot3 rotation(msg.pose.pose.orientation.w,
+                                //msg.pose.pose.orientation.x,
+                                //msg.pose.pose.orientation.y,
+                                //msg.pose.pose.orientation.z);
+        //pose_constraint_ = gtsam::Pose3(rotation, position);
+        //ROS_WARN("Processed sonar constraint.");
+    //}
+//}
+
+void SlamNode::SonarCovarianceCallback(const std_msgs::Float32MultiArray &msg){
+        auto cov = msg.data;
+        gtsam::Matrix covariance(12,12);
+        for (int i = 0; i < covariance.rows(); ++i)
+            for (int j = 0; j < covariance.cols(); ++j)
+                covariance(i, j) = cov[i + j*covariance.rows()];
+
+        //ROS_WARN("Adding sonar pose constraint to graph.");
+        //Eigen::Affine3d opt_pose = gm_->AddFactors(pose_constraint_, covariance);
+        //PublishOptimizedPath(opt_pose);
+        //PublishSonarTF();
+        //PublishTruePath();
 }
 
 geometry_msgs::PoseStamped SlamNode::TransformToPose(
