@@ -21,20 +21,20 @@ def main():
     rospy.init_node('two_view_sonar_adjustment')
     rospy.loginfo("Initializing Two-View sonar bundle adjustment.")
     detector = LandmarkDetector(verbose=is_verbose)
-    adjuster = BundleAdjuster(verbose=is_verbose, iters=1)
+    adjuster = BundleAdjuster(verbose=is_verbose, iters=10)
     rospy.sleep(0.5)
     # wait for buffer to fill up
     img2 = detector.img_buff.pop(0)
-    maps_img2 = detector.cart_map_buff.pop(0)
-    rate = rospy.Rate(5)
+    maps_img2 = detector.polar_map_buff.pop(0)
+    rate = rospy.Rate(10)
     while not rospy.is_shutdown():
         tic = time.time()
-        if len(detector.img_buff) == 0 or len(detector.cart_map_buff) == 0:
+        if len(detector.img_buff) == 0 or len(detector.polar_map_buff) == 0:
             continue
         img1 = img2
         img2 = detector.img_buff.pop(0)
         maps_img1 = maps_img2
-        maps_img2 = detector.cart_map_buff.pop(0)
+        maps_img2 = detector.polar_map_buff.pop(0)
         features = detector.extract_n_match([img1, img2])
         landmarks = detector.generate_landmarks([img1, img2], features,
                                                 [maps_img1, maps_img2])

@@ -42,7 +42,10 @@ class GraphManager {
   GraphManager();
   //! This is the ctor you want, with specifiable parameter values.
   GraphManager(const double prior_pos_stddev, const double prior_rot_stddev,
-               const double imu_accel_stddev, const double imu_omega_stddev);
+               const Eigen::Vector3d imu_accel_noise_stddev,
+               const Eigen::Vector3d imu_omega_noise_stddev,
+               const Eigen::Vector3d imu_accel_bias_stddev,
+               const Eigen::Vector3d imu_omega_bias_stddev);
   virtual ~GraphManager();
 
   /// Predict dead reckoning pose using the accumulated IMU measurements.
@@ -115,13 +118,17 @@ class GraphManager {
   gtsam::noiseModel::Diagonal::shared_ptr imu_noise_;
   gtsam::noiseModel::Diagonal::shared_ptr imu_bias_noise_;
   //! Standard deviation parameter for IMU's acceleration components.
-  const double imu_accel_stddev_ = 16.0e-3;  // [m/s2], from gazebo.
+  //const double imu_accel_stddev_ = 16.0e-3;  // [m/s2], from gazebo.
+  Eigen::Vector3d imu_accel_noise_stddev_;
   //! Standard deviation parameter for IMU's angular velocity components.
-  const double imu_omega_stddev_ = 0.02476;  // [rad/s], from gazebo.
+  //const double imu_omega_stddev_ = 0.02476;  // [rad/s], from gazebo.
+  Eigen::Vector3d imu_omega_noise_stddev_;
   //! Stddev for bias parameter for IMU's acceleration components.
-  const double imu_accel_bias_stddev_ = 24.0e-3; // [m/s2], from gazebo.
+  //const double imu_accel_bias_stddev_ = 24.0e-3; // [m/s2], from gazebo.
+  Eigen::Vector3d imu_accel_bias_stddev_;
   //! Stddev for bias parameter for IMU's angular velocity components.
-  const double imu_omega_bias_stddev_ = 1.55e-4; // [rad/s], from gazebo.
+  //const double imu_omega_bias_stddev_ = 1.55e-4; // [rad/s], from gazebo.
+  Eigen::Vector3d imu_omega_bias_stddev_;
 
   //! Setup iSAM's optimization and inference parameters.
   void SetupiSAM();
@@ -146,11 +153,12 @@ class GraphManager {
   gtsam::imuBias::ConstantBias cur_imu_bias_;
 
   //! Sonar extrinsics base (imu) link to sonar optical frame.
-  // TODO(aldoteran): move this to config file
-  gtsam::Point3 sonar_trans = gtsam::Point3(1.3, 0.0, -0.7);
-  //gtsam::Rot3 sonar_rot = gtsam::Rot3(0.000778532, 0.977653929,
-                                      //0.0001674033,-0.210219314);
-  gtsam::Rot3 sonar_rot = gtsam::Rot3(1.3267949e-6, 1.0, 0.0, 0.0);
+  // TODO(aldoteran): grab this to config file
+  gtsam::Point3 sonar_trans = gtsam::Point3(-0.02484, 0.14525, -1.22172);
+  // Zero Pitch
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.21936, 0.93477, -0.06936, -0.27065);
+  // 15 degree pitch
+  gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.215152, 0.8903867, -0.07935, -0.39322);
   gtsam::Pose3 sonar_extrinsics_ = gtsam::Pose3(sonar_rot, sonar_trans);
 
   /// Odometer for IMU preintegration between keyframes.

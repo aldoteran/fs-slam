@@ -35,8 +35,20 @@ void SlamNode::ReadParams() {
   // Measurement noise model parameters.
   nh_.getParam("prior_pos_stddev", prior_pos_stddev_);
   nh_.getParam("prior_rot_stddev", prior_rot_stddev_);
-  nh_.getParam("imu_accel_stddev", imu_accel_stddev_);
-  nh_.getParam("imu_omega_stddev", imu_omega_stddev_);
+
+  // Imu noise model parameters.
+  nh_.getParam("accel_noise_x", imu_accel_noise_stddev_(0));
+  nh_.getParam("accel_noise_y", imu_accel_noise_stddev_(1));
+  nh_.getParam("accel_noise_z", imu_accel_noise_stddev_(2));
+  nh_.getParam("accel_bias_x", imu_accel_bias_stddev_(0));
+  nh_.getParam("accel_bias_y", imu_accel_bias_stddev_(1));
+  nh_.getParam("accel_bias_z", imu_accel_bias_stddev_(2));
+  nh_.getParam("gyro_noise_x", imu_omega_noise_stddev_(0));
+  nh_.getParam("gyro_noise_y", imu_omega_noise_stddev_(1));
+  nh_.getParam("gyro_noise_z", imu_omega_noise_stddev_(2));
+  nh_.getParam("gyro_bias_x", imu_omega_bias_stddev_(0));
+  nh_.getParam("gyro_bias_y", imu_omega_bias_stddev_(1));
+  nh_.getParam("gyro_bias_z", imu_omega_bias_stddev_(2));
 
   // Sensor parameters.
   double imu_frequency = 50;  // [Hz]
@@ -69,39 +81,14 @@ void SlamNode::SetupRos() {
 
 void SlamNode::InitGraphManager() {
   gm_ = std::make_unique<GraphManager>(prior_pos_stddev_, prior_rot_stddev_,
-                                       imu_accel_stddev_, imu_omega_stddev_);
+                                       imu_accel_noise_stddev_, imu_omega_noise_stddev_,
+                                       imu_accel_bias_stddev_, imu_omega_bias_stddev_);
 }
 
 void SlamNode::InitState() {
-  ros::Duration(1.0).sleep(); // wait for TF buffer to build up
-  tf::StampedTransform transform;
-  ros::Time now = ros::Time::now();
-  try {
-    // Get current TF of the sonar wrt the world
-    tf_listener_.waitForTransform(map_frame_id_, imu_frame_id_,
-                                now, ros::Duration(5.0));
-    tf_listener_.lookupTransform(map_frame_id_, imu_frame_id_,
-                                now, transform);
-    tf::transformTFToEigen(transform, origin_);
-
-    ROS_INFO("Found TF for origin.");
-    std::cout << origin_.matrix() << std::endl;
-
-    ROS_INFO("Initializing Factor Graph with found origin.");
-    gtsam::Rot3 rot{origin_.rotation().matrix()};
-    gtsam::Point3 trans{origin_.translation()};
-    gtsam::Pose3 state_origin(rot, trans);
-    gm_->InitFactorGraph(state_origin);
-    // Publish first optimized pose and TF
-    PublishOptimizedPath(Eigen::Affine3d(state_origin.matrix()));
-  }
-  catch (tf::TransformException ex) {
-    ROS_ERROR("%s", ex.what());
-    ROS_WARN("TF for origin not found, defaulting to zero.");
     gm_->InitFactorGraph(gtsam::Pose3());
     // Publish first optimized pose and TF
     PublishOptimizedPath(Eigen::Affine3d());
-  }
 }
 
 void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
@@ -143,7 +130,7 @@ void SlamNode::SonarPoseCallback(
         // Publish the pose
         PublishOptimizedPath(opt_pose);
         PublishSonarTF();
-        PublishTruePath();
+        //PublishTruePath();
     }
 }
 

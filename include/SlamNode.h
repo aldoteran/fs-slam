@@ -138,9 +138,11 @@ class SlamNode {
   //! Standard deviation parameter for prior's rotation component [rad].
   double prior_rot_stddev_;
   //! Standard deviation parameter for IMU's acceleration component [???].
-  double imu_accel_stddev_;
+  Eigen::Vector3d imu_accel_noise_stddev_;
+  Eigen::Vector3d imu_accel_bias_stddev_;
   //! Standard deviation parameter for IMU's angluar velocity component [???].
-  double imu_omega_stddev_;
+  Eigen::Vector3d imu_omega_noise_stddev_;
+  Eigen::Vector3d imu_omega_bias_stddev_;
 
   /// IMU measurements sampling frequency [s].
   double imu_dt_ = 0.02;  // 50 Hz.

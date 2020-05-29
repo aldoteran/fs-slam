@@ -40,6 +40,7 @@ class BundleAdjuster:
         # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         self.phi_range = np.arange(-0.1047, 0.1047, 0.017453)
         self.pointcloud = [[],[],[]]
+        self.degeneracy_factors = Float32MultiArray()
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
                                         PoseStamped,
@@ -61,7 +62,7 @@ class BundleAdjuster:
                                               queue_size=1)
         self.tf_pub = tf.TransformBroadcaster()
 
-    def compute_constraint(self, landmarks, theta_stddev=0.005, range_stddev=0.005):
+    def compute_constraint(self, landmarks, theta_stddev=0.3, range_stddev=0.02):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -84,25 +85,26 @@ class BundleAdjuster:
         T_Xb = landmarks[0].rel_pose
         x_init, z_a, z_b = self._init_state(landmarks, Xb, T_Xb, N)
 
-        # phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
-        phis = [l.real_phi for l in landmarks]
+        phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
 
         # Stop condition
         epsilon = 0.01
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
+            self.degeneracy_factors.data = [N, 0.0, 0.0, 0.0]
             # (2) Compute whitened Jacobian A and error vector b
             A = self._get_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
             b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
 
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            cond_nums = [np.max(S)/s for s in S]
-            thresh = np.argmin((np.asarray(cond_nums)/8.0 - 1)**2)
-            import pdb
-            pdb.set_trace()
-            S[S<S[thresh]] = 0.0
+            self.degeneracy_factors.data[1] = S[0]/S[-1]
+            # cond_nums = [np.max(S)/s for s in S]
+            # thresh = np.argmin((np.asarray(cond_nums)/20.0 - 1)**2)
+            # S[S<S[thresh]] = 0.0
+            S[S<50] = 0.0
+            self.degeneracy_factors.data[2] = S[0]/S[-1]
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
@@ -351,73 +353,6 @@ class BundleAdjuster:
                                   quat, rospy.Time.now(),
                                   "bundle_adjustment/sonar_pose_constraint",
                                   "slam/dead_reckoning/sonar_pose")
-
-    def _publish_pose(self, x, sigma, R):
-        """
-        TODO
-        """
-        trans_Xb = np.array([[x[0,0]],
-                             [x[1,0]],
-                             [x[2,0]]])
-        quat = tf.transformations.quaternion_from_euler(x[5,0],
-                                                        x[4,0],
-                                                        x[3,0])
-        # quat = tf.transformations.quaternion_from_euler(x[3,0],
-                                                        # x[4,0],
-                                                        # x[5,0])
-        quat = self.normalize_quat(quat)
-        # Publish pose
-        sonar_pose = PoseStamped()
-        sonar_pose.header.frame_id = "bundle_adjustment/sonar_estimate"
-        sonar_pose.header.stamp = rospy.Time.now()
-        sonar_pose.pose.position.x = trans_Xb[0,0]
-        sonar_pose.pose.position.y = trans_Xb[1,0]
-        sonar_pose.pose.position.z = trans_Xb[2,0]
-        sonar_pose.pose.orientation.x = quat[0]
-        sonar_pose.pose.orientation.y = quat[1]
-        sonar_pose.pose.orientation.z = quat[2]
-        sonar_pose.pose.orientation.w = quat[3]
-        # publish tf for debugging
-        self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
-                                  quat, rospy.Time.now(),
-                                  "bundle_adjustment/sonar_estimate",
-                                  "/rexrov/forward_sonar_optical_frame")
-        self.pose_pub.publish(sonar_pose)
-        # Publish odometry
-        sonar_pose = PoseWithCovariance()
-        sonar_pose.pose.position.x = trans_Xb[0,0]
-        sonar_pose.pose.position.y = trans_Xb[1,0]
-        sonar_pose.pose.position.z = trans_Xb[2,0]
-        sonar_pose.pose.orientation.x = quat[0]
-        sonar_pose.pose.orientation.y = quat[1]
-        sonar_pose.pose.orientation.z = quat[2]
-        sonar_pose.pose.orientation.w = quat[3]
-        sonar_pose.covariance = R.ravel().tolist()
-        sonar_odom = Odometry()
-        sonar_odom.header.frame_id = "/rexrov/forward_sonar_optical_frame"
-        sonar_odom.child_frame_id = "bundle_adjustment/sonar_estimate"
-        sonar_odom.header.stamp = rospy.Time.now()
-        sonar_odom.pose = sonar_pose
-        self.odom_pub.publish(sonar_odom)
-
-    def _publish_true_odom(self, Xb):
-        quat = tf.transformations.quaternion_from_matrix(Xb)
-        trans_Xb = Xb[:-1,-1:]
-        # Publish odometry
-        sonar_pose = PoseWithCovariance()
-        sonar_pose.pose.position.x = trans_Xb[0,0]
-        sonar_pose.pose.position.y = trans_Xb[1,0]
-        sonar_pose.pose.position.z = trans_Xb[2,0]
-        sonar_pose.pose.orientation.x = quat[0]
-        sonar_pose.pose.orientation.y = quat[1]
-        sonar_pose.pose.orientation.z = quat[2]
-        sonar_pose.pose.orientation.w = quat[3]
-        sonar_odom = Odometry()
-        sonar_odom.header.frame_id = "/world"
-        sonar_odom.child_frame_id = "bundle_adjustment/sonar_estimate"
-        sonar_odom.header.stamp = rospy.Time.now()
-        sonar_odom.pose = sonar_pose
-        self.true_odom_pub.publish(sonar_odom)
 
     def _publish_pointcloud(self, state, phis):
         """

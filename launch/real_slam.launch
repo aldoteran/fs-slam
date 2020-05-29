@@ -3,18 +3,19 @@
   <param name="/use_sim_time" value="true"/>
 
   <!--args="1.3 0 -0.7 -1.57 0 -1.99-->
+  <!--args="-0.02484 0.14521 -1.22173 -0.055 0.8037 3.455-->
   ## Static trasform of the sonar optical frame (from gazebo) ##
   <node pkg="tf" type="static_transform_publisher" name="dead_reckoning_to_sonar"
-      args="1.3 0 -0.7 0 0 3.14
+      args="-0.02484 0.14521 -1.22173 -0.055 0.542 3.455
             /slam/dead_reckoning/base_pose
             /slam/dead_reckoning/sonar_pose 10"/>
   <node pkg="tf" type="static_transform_publisher" name="base_link_to_sonar"
-      args="1.3 0 -0.7 0 0 3.14
+      args="-0.02484 0.14521 -1.22173 -0.055 0.542 3.455
             /rexrov/base_link
             /rexrov/sonar_pose 10"/>
 
   ## SLAM params and node ##
-  <rosparam command="load" file="$(find fs-slam)/params/slam_params.yaml"/>
+  <rosparam command="load" file="$(find fs-slam)/params/real_slam_params.yaml"/>
   <node name="slam_node" pkg="fs-slam" type="slam_node" output="screen"/>
 
   ## Sonar bundle adjustment node ##

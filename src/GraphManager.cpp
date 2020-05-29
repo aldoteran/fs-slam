@@ -14,12 +14,16 @@ GraphManager::GraphManager() { SetupNoiseModels(); }
 
 GraphManager::GraphManager(const double prior_pos_stddev,
                            const double prior_rot_stddev,
-                           const double imu_accel_stddev,
-                           const double imu_omega_stddev)
+                           const Eigen::Vector3d imu_accel_noise_stddev,
+                           const Eigen::Vector3d imu_omega_noise_stddev,
+                           const Eigen::Vector3d imu_accel_bias_stddev,
+                           const Eigen::Vector3d imu_omega_bias_stddev)
     : prior_pos_stddev_(prior_pos_stddev),
       prior_rot_stddev_(prior_rot_stddev),
-      imu_accel_stddev_(imu_accel_stddev),
-      imu_omega_stddev_(imu_omega_stddev) {
+      imu_accel_noise_stddev_(imu_accel_noise_stddev),
+      imu_omega_noise_stddev_(imu_omega_noise_stddev),
+      imu_accel_bias_stddev_(imu_accel_bias_stddev),
+      imu_omega_bias_stddev_(imu_omega_bias_stddev) {
   SetupNoiseModels();
   SetupiSAM();
   SetupOdometers();
@@ -49,14 +53,15 @@ void GraphManager::SetupNoiseModels() {
     vel_noise_ = gtsam::noiseModel::Diagonal::Sigmas(vel_sigmas);
     // Fixed IMU noise
     gtsam::Vector imu_sigmas(6);
-    imu_sigmas << imu_accel_stddev_, imu_accel_stddev_, imu_accel_stddev_,
-      imu_omega_stddev_, imu_omega_stddev_, imu_omega_stddev_;
+    imu_sigmas << imu_accel_noise_stddev_(0), imu_accel_noise_stddev_(1),
+                  imu_accel_noise_stddev_(2), imu_omega_noise_stddev_(0),
+                  imu_omega_noise_stddev_(1), imu_omega_noise_stddev_(2);
     imu_noise_ = gtsam::noiseModel::Diagonal::Sigmas(imu_sigmas);
     // Prior IMU bias.
     gtsam::Vector imu_bias_sigmas(6);
-    imu_bias_sigmas << imu_accel_bias_stddev_, imu_accel_bias_stddev_,
-                     imu_accel_bias_stddev_, imu_omega_bias_stddev_,
-                     imu_omega_bias_stddev_, imu_omega_bias_stddev_;
+    imu_bias_sigmas << imu_accel_bias_stddev_(0), imu_accel_bias_stddev_(1),
+                       imu_accel_bias_stddev_(2), imu_omega_bias_stddev_(0),
+                       imu_omega_bias_stddev_(1), imu_omega_bias_stddev_(2);
     imu_bias_noise_ = gtsam::noiseModel::Diagonal::Sigmas(imu_bias_sigmas);
 }
 
@@ -70,18 +75,26 @@ void GraphManager::SetupOdometers() {
     // NOTE(tonioteran) this chooses a particular direction for the gravity
     // vector, explained here https://gtsam.org/doxygen/a00698_source.html.
     boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> p =
-      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(9.8);
+      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(9.81);
 
     // TODO(tonioteran): pull out to params yaml.
     // This parameters are explained here: https://gtsam.org/doxygen/a03439.html
-    p->accelerometerCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(imu_accel_stddev_, 2);
-    p->gyroscopeCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(imu_omega_stddev_, 2);
-    p->biasAccCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(imu_accel_bias_stddev_, 2);
-    p->biasOmegaCovariance =
-      gtsam::Matrix33::Identity(3, 3) * pow(imu_omega_bias_stddev_, 2);
+    Eigen::DiagonalMatrix<double, 3> accel_cov(pow(imu_accel_noise_stddev_(0), 2),
+                                               pow(imu_accel_noise_stddev_(1), 2),
+                                               pow(imu_accel_noise_stddev_(2), 2));
+    p->accelerometerCovariance = accel_cov;
+    Eigen::DiagonalMatrix<double, 3> omega_cov(pow(imu_omega_noise_stddev_(0), 2),
+                                               pow(imu_omega_noise_stddev_(1), 2),
+                                               pow(imu_omega_noise_stddev_(2), 2));
+    p->gyroscopeCovariance = omega_cov;
+    Eigen::DiagonalMatrix<double, 3> accel_bias_cov(pow(imu_accel_bias_stddev_(0), 2),
+                                                    pow(imu_accel_bias_stddev_(1), 2),
+                                                    pow(imu_accel_bias_stddev_(2), 2));
+    p->biasAccCovariance = accel_bias_cov;
+    Eigen::DiagonalMatrix<double, 3> omega_bias_cov(pow(imu_omega_bias_stddev_(0), 2),
+                                                    pow(imu_omega_bias_stddev_(1), 2),
+                                                    pow(imu_omega_bias_stddev_(2), 2));
+    p->biasOmegaCovariance = omega_bias_cov;
     p->integrationCovariance = gtsam::Matrix33::Identity(3, 3) * 1e-8;
     p->biasAccOmegaInt = gtsam::Matrix::Identity(6, 6) * 1e-5;
 
@@ -96,6 +109,7 @@ void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
     // Save initial state
     initial_state_ = gtsam::NavState(pose, gtsam::Vector3(0,0,0));
     gtsam::Pose3 sonar_init_pose = pose * sonar_extrinsics_;
+
     std::cout << " ---------- Graph Priors ----------- " << std::endl;
     std::cout << "IMU Initial Pose" << std::endl;
     std::cout << pose << std::endl;
