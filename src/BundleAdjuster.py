@@ -100,11 +100,12 @@ class BundleAdjuster:
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
             self.degeneracy_factors.data[1] = S[0]/S[-1]
-            # cond_nums = [np.max(S)/s for s in S]
-            # thresh = np.argmin((np.asarray(cond_nums)/20.0 - 1)**2)
+            cond_nums = [np.max(S)/s for s in S]
+            thresh = np.argmin((np.asarray(cond_nums)/10.0 - 1)**2)
             # S[S<S[thresh]] = 0.0
             S[S<50] = 0.0
-            self.degeneracy_factors.data[2] = S[0]/S[-1]
+            self.degeneracy_factors.data[3] = S[0]/S[-1]
+            self.degeneracy_pub.publish(self.degeneracy_factors)
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)

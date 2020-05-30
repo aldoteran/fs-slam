@@ -182,18 +182,18 @@ class LandmarkDetector:
         :return: relative pose T_Xb expressed as an homogenous transformation matrix
         :rtype: np.array (4,4)
         """
-        # try:
-            # # self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
-                                                # # imgs[0][1], rospy.Duration(0.2))
-            # trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
-                                                                # '/slam/optimized/sonar_pose',
-                                                                # imgs[0][1])
-            # trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
-                                                                # '/slam/optimized/sonar_pose',
-                                                                # imgs[1][1])
-        # except:
-            # rospy.logwarn("No relative pose found. Setting initial conditions to zero.")
-        return (np.eye(4), np.eye(4), np.eye(4))
+        try:
+            # self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
+                                                # imgs[0][1], rospy.Duration(0.2))
+            trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
+                                                                '/slam/optimized/sonar_pose',
+                                                                imgs[0][1])
+            trans_Xb, rot_Xb = self.tf_listener.lookupTransform('/world',
+                                                                '/slam/optimized/sonar_pose',
+                                                                imgs[1][1])
+        except:
+            rospy.logwarn("No relative pose found. Setting initial conditions to zero.")
+            return (np.eye(4), np.eye(4), np.eye(4))
         # try:
             # # get poses and compute T_xb from the IMU odometry.
             # self.tf_listener.waitForTransform('/world', '/slam/dead_reckoning/sonar_pose',

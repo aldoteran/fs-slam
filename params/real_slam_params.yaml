@@ -1,7 +1,7 @@
 # Parameters for the SLAM node.
 
 # Frequency at which we want to operate the SLAM ROS node.
-node_loop_rate: 10
+node_loop_rate: 50
 
 # Topic in which the IMU measurements are being received.
 imu_meas_topic: /imu/data

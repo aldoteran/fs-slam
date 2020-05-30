@@ -156,9 +156,9 @@ class GraphManager {
   // TODO(aldoteran): grab this to config file
   gtsam::Point3 sonar_trans = gtsam::Point3(-0.02484, 0.14525, -1.22172);
   // Zero Pitch
-  //gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.21936, 0.93477, -0.06936, -0.27065);
+  gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.21936, 0.93477, -0.06936, -0.27065);
   // 15 degree pitch
-  gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.215152, 0.8903867, -0.07935, -0.39322);
+  //gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.215152, 0.8903867, -0.07935, -0.39322);
   gtsam::Pose3 sonar_extrinsics_ = gtsam::Pose3(sonar_rot, sonar_trans);
 
   /// Odometer for IMU preintegration between keyframes.
