@@ -90,9 +90,9 @@ class GraphManager {
   //! deviation values with units [m], [m], [m], [rad], [rad], [rad].
   gtsam::noiseModel::Diagonal::shared_ptr prior_noise_;
   //! Standard deviation parameter for prior's translation component.
-  const double prior_pos_stddev_ = 0.01;  // [m], uninformed guess.
+  const double prior_pos_stddev_ = 0.0001;  // [m], uninformed guess.
   //! Standard deviation parameter for prior's rotation component.
-  const double prior_rot_stddev_ = 0.001;  // [rad], uninformed guess.
+  const double prior_rot_stddev_ = 0.0001;  // [rad], uninformed guess.
   // TODO(aldoteran): This must be computed as in section V-C of the paper.
   //! Noise model for the two view sonar factor's measurement information. Standard
   //! deviation values with units [m], [m], [m], [rad], [rad], [rad].
@@ -104,8 +104,8 @@ class GraphManager {
   const double sonar_rot_stddev_ = 0.0001;  // [rad], uninformed guess.
   //! Very small noise for the sonar extrinsics
   gtsam::noiseModel::Diagonal::shared_ptr sonar_extrinsics_noise_;
-  const double sonar_ex_pos_stddev_ = 1e-5;
-  const double sonar_ex_rot_stddev_ = 1e-5;
+  const double sonar_ex_pos_stddev_ = 1e-15;
+  const double sonar_ex_rot_stddev_ = 1e-15;
 
   //! TODO(aldoteran): Noise model for the velocity estimates.
   gtsam::noiseModel::Diagonal::shared_ptr vel_noise_;

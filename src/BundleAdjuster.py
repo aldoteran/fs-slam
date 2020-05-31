@@ -17,6 +17,17 @@ from geometry_msgs.msg import PoseWithCovariance, PoseStamped
 from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import PointCloud2
 
+        # PASTE ANYWHERE FOR DEBUGGING
+        # import pdb
+        # import matplotlib.pyplot as plt
+        # from mpl_toolkits.mplot3d import Axes3D
+        # import sys
+        # np.set_printoptions(threshold=sys.maxsize)
+        # np.set_printoptions(linewidth=250)
+        # np.set_printoptions(suppress=True)
+        # pdb.set_trace()
+
+
 __license__ = "MIT"
 __author__ = "Aldo Teran, Antonio Teran"
 __author_email__ = "aldot@kth.se, teran@mit.edu"
@@ -26,22 +37,19 @@ class BundleAdjuster:
     """
     TBA
     """
-    def __init__(self, verbose=True, test=False, debug=False,
-                 benchmark=False, iters=10, svd_thresh=60):
-        # Flags
-        self.is_test = test
-        self.is_debug = debug
-        self.is_benchmark = benchmark
-        self.is_singular = False
-        self.verbose = verbose
+    def __init__(self, iters=10, bearing_stddev=0.05, range_stddev=0.05,
+                 vertical_aperture=0.1047, vertical_resolution=0.017, verbose=False):
 
         # GN params
-        # TODO(aldoteran): add this to the config file
         self.iters = iters
-        self.svd_threshold = svd_thresh
-        # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
-        self.phi_range = np.arange(-0.1047, 0.1047, 0.017)
-        self.pointcloud = [[],[],[]]
+        self.meas_noise = np.diag((bearing_stddev**2,
+                                   range_stddev**2))
+        self.phi_range = np.arange(-vertical_aperture,
+                                   vertical_aperture,
+                                   vertical_resolution)
+        # Flags
+        self.is_verbose = verbose
+        self.is_singular = False
         self.degeneracy_factors = Float32MultiArray()
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -67,9 +75,10 @@ class BundleAdjuster:
                                               Float32MultiArray,
                                               queue_size=1)
 
+        self.tf_listener = tf.TransformListener()
         self.tf_pub = tf.TransformBroadcaster()
 
-    def compute_constraint(self, landmarks, theta_stddev=0.01, range_stddev=0.01):
+    def compute_constraint(self, landmarks, Xa, Xb):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -79,70 +88,55 @@ class BundleAdjuster:
 
         :return:
         """
-        #TODO: import from config
-        sigma = np.diag((theta_stddev**2, range_stddev**2))
-        # Compute these only once
-        inv_sigma = np.linalg.inv(sigma)
-        sqrt_sigma = np.linalg.inv(sqrtm(sigma))
-
-        # init with best info up until this point
+        # Initialize sate
         N = len(landmarks)
-        Xb = landmarks[0].Xb
-        Xa = landmarks[0].Xa
-        T_Xb = landmarks[0].rel_pose
+        T_Xb = np.linalg.inv(Xa).dot(Xb)
         x_init, z_a, z_b = self._init_state(landmarks, Xb, T_Xb, N)
 
-        phis = self._opt_phi_search(x_init, z_b, T_Xb, inv_sigma, N, landmarks)
+        phis = self._opt_phi_search(x_init, z_b, T_Xb, N)
         # phis = [l.real_phi for l in landmarks]
 
         # Stop condition
-        epsilon = 0.005
+        epsilon = 1e-6
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
-            self.degeneracy_factors.data = [0.0, 0.0, N]
             # (2) Compute whitened Jacobian A and error vector b
-            A = self._get_jacobians(x_init, T_Xb, phis, sqrt_sigma, N)
-            b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, sqrt_sigma, N)
+            A = self._get_jacobians(x_init, T_Xb, phis, N)
+            b = self._get_error_b(x_init, T_Xb, phis, z_a, z_b, N)
 
-            # for debugging
-            # vals, vectors = np.linalg.eig(A.transpose().dot(A))
-            # self.degeneracy_factors.data[0] = (np.min(vals[np.nonzero(vals)]) + 1)
-            # self.degeneracy_factors.data[1] = np.sqrt(np.min(vals[np.nonzero(vals)])/np.max(vals))
-            # self.degeneracy_pub.publish(self.degeneracy_factors)
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
-            self.degeneracy_factors.data[1] = S[-1]/S[0]
             cond_nums = [np.max(S)/s for s in S]
-            tresh = np.argmin((np.asarray(cond_nums)/10.0 - 1)**2)
-            self.degeneracy_factors.data[0] = S[tresh]
-            S[S<S[tresh]] = 0.0
-            # print(np.max(S)/np.min(S[np.nonzero(S)]))
+            # for debugging
+            self.degeneracy_factors.data = [0.0, N]
+            self.degeneracy_factors.data[0] = S[0]/S[-1]
             self.degeneracy_pub.publish(self.degeneracy_factors)
+            thresh = np.argmin((np.asarray(cond_nums)/10000.0 - 1)**2)
+            S[S<50] = 0.0
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
             delta = np.linalg.pinv(A_d).dot(b)
             x_init += delta
-            T_Xb = self._update_transform(Xa, x_init)
+            T_Xb = self._update_transform(x_init)
 
             # (5) Check if converged
             if np.linalg.norm(delta) < epsilon or it >= self.iters:
                 break
 
-        covariance = self._get_sqrt_information(A_d)
+        covariance = self._get_sqrt_information(S, V)
         if self.is_singular:
             self.is_singular = False
             return
 
         # Publish everything
-        if self.verbose:
+        if self.is_verbose:
             rospy.loginfo("Resulting relative pose:\n{}".format(T_Xb))
         self._publish_pose_constraint(T_Xb, covariance)
         # self._publish_pose(x_init, sigma, covariance)
         self._publish_true_odom(Xb)
         # self._publish_pointcloud(x_init, phis)
-
 
     def _init_state(self, landmarks, Xb, T_Xb, N):
         x = np.zeros((12+2*N, 1))
@@ -159,10 +153,31 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, inv_sigma, N, landmarks):
+    def _init_state_6(self, landmarks, Xb, T_Xb, N):
+        x = np.zeros((6+2*N, 1))
+        z_a = np.zeros((2*N, 1))
+        z_b = np.zeros((2*N, 1))
+        # X Y Z Y P R
+        # quat = tf.transformations.quaternion_from_matrix(T_Xb)
+        roll, pitch, yaw = tf.transformations.euler_from_matrix(T_Xb)
+        x[0:6,0:1] = np.array([[T_Xb[0,-1]],[T_Xb[1,-1]],[T_Xb[2,-1]],
+                               [yaw],[pitch],[roll]])
+                               # [roll],[pitch],[yaw]])
+
+        i = 0
+        for l in landmarks:
+            x[6+i:6+i+2,:] = l.polar_img1
+            z_a[i:i+2,:] = l.polar_img1
+            z_b[i:i+2,:] = l.polar_img2
+            i += 2
+
+        return (x, z_a, z_b)
+
+    def _opt_phi_search(self, x, z_b, T_Xb, N):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
+        inv_sigma = np.linalg.inv(self.meas_noise)
         rot_Xb = T_Xb[:-1,:-1]
         trans_Xb = T_Xb[:-1,-1:]
         phis = []
@@ -171,7 +186,7 @@ class BundleAdjuster:
             best_phi = 0.0
             old_error = 9999
             z_bi = z_b[i:i+2,:]
-            polar = x[12+i:12+i+2,:]
+            polar = x[6+i:6+i+2,:]
             for phi in self.phi_range:
                 q_i = rot_Xb.transpose().dot(self._project_coords(polar, phi) - trans_Xb)
                 innov = self.cart_to_polar(q_i) - z_bi
@@ -203,7 +218,20 @@ class BundleAdjuster:
                          [r * np.sin(theta) * np.cos(phi)],
                          [r * np.sin(phi)]])
 
-    def _update_transform(self, Xa, x):
+    def _update_transform_6(self, Xa, x):
+        """
+        Update T_Xb
+        """
+        trans = np.array([[x[0,0]],[x[1,0]],[x[2,0]]])
+        # y p r in state
+        # quat = tf.transformations.quaternion_from_euler(x[5,0], x[4,0], x[3,0])
+        quat = tf.transformations.quaternion_from_euler(x[3,0], x[4,0], x[5,0])
+        T_Xb = tf.transformations.quaternion_matrix(quat)
+        T_Xb[:-1,-1:] = trans
+
+        return T_Xb
+
+    def _update_transform(self, x):
         """
         Update T_Xb
         """
@@ -215,53 +243,103 @@ class BundleAdjuster:
 
         return T_Xb
 
-    def _predict_hb(self, T_Xb, cart):
-        return T_Xb[:-1,:-1].transpose().dot(cart - T_Xb[:-1, -1:])
-
-    def _get_jacobians(self, x, T_Xb, phis, sqrt_sigma, N):
+    def _get_jacobians(self, x, T_Xb, phis, N):
+        sqrt_sigma = np.linalg.inv(sqrtm(self.meas_noise))
         R = T_Xb[:-1,:-1]
-        t = T_Xb[:-1,-1]
+        t = T_Xb[:-1,-1:]
+        tx = t[0,0]
+        ty = t[0,0]
+        tz = t[0,0]
 
-        info_theta = sqrt_sigma[0,0]
-        info_range = sqrt_sigma[1,1]
-        diag = [info_range if i%2==0 else info_theta for i in range(1,2*N+1,1)]
+        # First H_a
+        H_a = np.zeros((2*N, 12+2*N))
+        for i in range(0,2*N,2):
+            H_a[i:i+2,12+i:12+i+2] = sqrt_sigma
 
-        H_A = np.hstack((np.zeros((2*N,12)), np.diag(diag)))
-
-        H_B = np.zeros((2*N, 12+2*N))
+        # Then H_b
+        H_b = np.zeros(H_a.shape)
         for j,i in enumerate(range(0,2*N,2)):
-            polar = np.array([[x[12+i,0]],
-                              [x[12+i+1,0]],
-                              [phis[j]]])
-            p = np.squeeze(self.polar_to_cart(polar))
-            q = self._predict_hb(T_Xb, p)
+            # Get the current estimates of the landmarks
+            theta = x[12+i,0]
+            rang = x[12+i+1,0]
+            phi = phis[j]
+            p = self.polar_to_cart(np.array([[theta],[rang],[phi]]))
+            px = p[0,0]
+            py = p[1,0]
+            pz = p[2,0]
+            q = R.transpose().dot(p - t)
+            qx = q[0,0]
+            qy = q[1,0]
+            qz = q[2,0]
 
-            zhat_q = np.array([[-q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2),
-                                q[0,0]/np.sqrt(q[0,0]**2+q[1,0]**2), 0.0],
-                            [q[0,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
-                                q[1,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2),
-                                q[2,0]/np.sqrt(q[0,0]**2+q[1,0]**2+q[2,0]**2)]])
-            q_xb = np.array([[p[0]-t[0], p[1]-t[1], p[2]-t[2], 0, 0, 0, 0, 0, 0,
-                              -R[0,0], -R[1,0], -R[2,0]],
-                             [0, 0, 0, p[0]-t[0], p[1]-t[1], p[2]-t[2], 0, 0, 0,
-                              -R[0,1], -R[1,1], -R[2,1]],
-                             [0, 0, 0, 0, 0, 0, p[0]-t[0], p[1]-t[1], p[2]-t[2],
-                              -R[0,2], -R[1,2], -R[2,2]]])
-            H_B[i:i+2,0:12] = zhat_q.dot(q_xb)
+            zhat_q = np.array([[-qy/np.sqrt(qx**2+qy**2),
+                                qx/np.sqrt(qx**2+qy**2), 0.0],
+                               [qx/np.sqrt(qx**2+qy**2+qz**2),
+                                qy/np.sqrt(qx**2+qy**2+qz**2),
+                                qz/np.sqrt(qx**2+qy**2+qz**2)]])
+            q_xb = np.array([[px-tx,py-ty,pz-tz,0,0,0,0,0,0,-R[0,0],-R[1,0],-R[2,0]],
+                             [0,0,0,px-tx,py-ty,pz-tz,0,0,0,-R[0,1],-R[1,1],-R[2,1]],
+                             [0,0,0,0,0,0,px-tx,py-ty,pz-tz,-R[0,2],-R[1,2],-R[2,2]]])
+            # Whiten and add to Jacobian
+            H_b[i:i+2,0:12] = sqrt_sigma.dot(zhat_q.dot(q_xb))
 
             q_p = R.transpose()
-            p_mi = np.array([[-polar[1,0]*np.sin(polar[0,0])*np.cos(polar[2,0]),
-                              np.cos(polar[0,0])*np.cos(polar[2,0])],
-                            [polar[1,0]*np.cos(polar[0,0])*np.cos(polar[2,0]),
-                             np.sin(polar[0,0])*np.cos(polar[2,0])],
-                            [0.0, np.sin(polar[2,0])]])
-            H_B[i:i+2,12+1*i:12+2+1*i] = zhat_q.dot(q_p).dot(p_mi)
-            # Whiten
-            H_B[i:i+2,:] = sqrt_sigma.dot(H_B[i:i+2,:])
+            p_mi = np.array([[-rang*np.sin(theta)*np.cos(phi),np.cos(theta)*np.cos(phi)],
+                             [rang*np.cos(theta)*np.cos(phi),np.sin(theta)*np.cos(phi)],
+                             [0., np.sin(phi)]])
+            # Whiten and add
+            H_b[i:i+2,12+i:12+i+2] = sqrt_sigma.dot(zhat_q.dot(q_p).dot(p_mi))
 
-        return np.vstack((H_A, H_B))
+        return np.vstack((H_a, H_b))
 
-    def _get_error_b(self, x, T_Xb, phis, z_a, z_b, sqrt_sigma, N):
+    def _get_jacobians_6(self, x, T_Xb, phis, sqrt_sigma, N):
+        R_b = T_Xb[:-1,:-1]
+        t_b = T_Xb[:-1,-1:]
+
+        # First H_a
+        H_a = np.zeros((2*N, 6+2*N))
+        for i in range(0,2*N,2):
+            # H_a[i:i+2,6+i:6+i+2] = sqrt_sigma
+            H_a[i:i+2,6+i:6+i+2] = np.eye(2)
+
+        # Then H_b
+        H_b = np.zeros(H_a.shape)
+        for j,i in enumerate(range(0,2*N,2)):
+            # Get the current estimates of the landmarks
+            theta = x[6+i,0]
+            rang = x[6+i+1,0]
+            phi = phis[j]
+            p = self.polar_to_cart(np.array([[theta],[rang],[phi]]))
+            q = R_b.transpose().dot(p - t_b)
+            qx = q[0,0]
+            qy = q[1,0]
+            qz = q[2,0]
+
+            zhat_q = np.array([[-qy/np.sqrt(qx**2+qy**2),
+                                qx/np.sqrt(qx**2+qy**2), 0.0],
+                               [qx/np.sqrt(qx**2+qy**2+qz**2),
+                                qy/np.sqrt(qx**2+qy**2+qz**2),
+                                qz/np.sqrt(qx**2+qy**2+qz**2)]])
+            q_xb = np.array([[0., -qz, qy, -1.0, 0., 0.],
+                             [qz, 0., -qx, 0., -1.0, 0.,],
+                             [-qy, qx, 0., 0., 0., -1.0]])
+            # Whiten and add to Jacobian
+            H_b[i:i+2,0:6] = sqrt_sigma.dot(zhat_q.dot(q_xb))
+            # H_b[i:i+2,0:6] = zhat_q.dot(q_xb)
+
+            q_p = R_b.transpose()
+            p_mi = np.array([[-rang*np.sin(theta)*np.cos(phi),
+                              np.cos(theta)*np.cos(phi)],
+                             [rang*np.cos(theta)*np.cos(phi),
+                              np.sin(theta)*np.cos(phi)],
+                             [0., np.sin(phi)]])
+            # Whiten and add
+            H_b[i:i+2,6+i:6+i+2] = sqrt_sigma.dot(zhat_q.dot(q_p).dot(p_mi))
+            # H_b[i:i+2,6+i:6+i+2] = zhat_q.dot(q_p).dot(p_mi)
+
+        return np.vstack((H_a, H_b))
+
+    def _get_error_b(self, x, T_Xb, phis, z_a, z_b, N):
         """
         :param x: state
         :type x: np.array (12+2*N,1)
@@ -269,10 +347,11 @@ class BundleAdjuster:
         :return: predicted range-bearing measurement of landmark from Xa to Xb
         :rtype: np.array (2,1) [theta, range]
         """
+        sqrt_sigma = np.linalg.inv(sqrtm(self.meas_noise))
         b_a = np.zeros(z_a.shape)
         b_b = np.zeros(z_b.shape)
-        rot_Xb = T_Xb[:-1, :-1]
-        trans_Xb = T_Xb[:-1, -1:]
+        rot_Xb = T_Xb[:-1,:-1]
+        trans_Xb = T_Xb[:-1,-1:]
 
         for j,i in enumerate(range(0,2*N,2)):
             polar = np.array([[x[12+i,0]],
@@ -284,7 +363,7 @@ class BundleAdjuster:
 
         return np.vstack((b_a, b_b))
 
-    def _get_sqrt_information(self, A_d):
+    def _get_sqrt_information(self, S, V):
         """
         Computes the sqrt information matrix as in section V-C in
         the paper.
@@ -295,12 +374,12 @@ class BundleAdjuster:
         :return: Square root information matrix R
         :rtype: np.array (6,6)
         """
-        Gamma = A_d.transpose().dot(A_d)
+        Gamma = V.transpose().dot(np.diag(S).transpose()).dot(np.diag(S)).dot(V)
         # Shur's complement
-        Gamma_11 = Gamma[0:6,0:6]
-        Gamma_12 = Gamma[0:6,6:]
-        Gamma_21 = Gamma[6:,0:6]
-        Gamma_22 = Gamma[6:,6:]
+        Gamma_11 = Gamma[0:12,0:12]
+        Gamma_12 = Gamma[0:12,12:]
+        Gamma_21 = Gamma[12:,0:12]
+        Gamma_22 = Gamma[12:,12:]
         try:
             Lambda = Gamma_11 - Gamma_12.dot(np.linalg.inv(Gamma_22)).dot(Gamma_21)
             covariance = np.linalg.inv(Lambda)
@@ -308,10 +387,29 @@ class BundleAdjuster:
             rospy.logerr("Singular matrix encountered when computing covariance, skipping...")
             self.is_singular = True
             return None
-        # L, D, P = ldl(Lambda, lower=False)
-        # sqrt_inf = sqrtm(D[P,:]).transpose().dot(L[P,:].transpose())
+        # Compute equivalent 6 by 6 covariance
+        covariance = self._get_equivalent(covariance)
 
         return covariance
+
+    def _get_equivalent(self, cov):
+        # Computes the equivalent 6 by 6 covariance matrix from a 12 by 12
+        k = cov[0,0]**2 + cov[1,0]**2
+        J_11 = -cov[1,0]/k
+        J_14 = cov[0,0]/k
+        J_21 = cov[0,0]*cov[2,1]/(np.sqrt(k)*(k+cov[2,1]**2))
+        J_24 = cov[1,0]*cov[2,1]/(np.sqrt(k)*(k+cov[2,1]**2))
+        J_28 = -np.sqrt(k)/(k+cov[2,1]**2)
+        J_38 = cov[2,2]/(cov[2,1]**2+cov[2,2]**2)
+        J_39 = -cov[2,1]/(cov[2,1]**2+cov[2,2]**2)
+        J = np.array([[J_11,0,0,J_14,0,0,0,0,0],
+                      [J_21,0,0,J_24,0,0,0,J_28,0],
+                      [0,0,0,0,0,0,0,J_38,J_39]])
+        top = np.hstack((np.zeros((3,9)),np.eye(3)))
+        bottom = np.hstack((J,np.zeros((3,3))))
+        Jacobian = np.vstack((top,bottom))
+
+        return Jacobian.dot(cov).dot(Jacobian.transpose())
 
     def _publish_pose_constraint(self, T_Xb, R):
         """
@@ -343,7 +441,8 @@ class BundleAdjuster:
         self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
                                   quat, rospy.Time.now(),
                                   "bundle_adjustment/sonar_pose_constraint",
-                                  "slam/dead_reckoning/sonar_pose")
+                                  # "slam/dead_reckoning/sonar_pose")
+                                  "rexrov/sonar_pose")
 
     def _publish_pose(self, x, sigma, R):
         """
@@ -352,12 +451,12 @@ class BundleAdjuster:
         trans_Xb = np.array([[x[0,0]],
                              [x[1,0]],
                              [x[2,0]]])
-        quat = tf.transformations.quaternion_from_euler(x[5,0],
-                                                        x[4,0],
-                                                        x[3,0])
-        # quat = tf.transformations.quaternion_from_euler(x[3,0],
+        # quat = tf.transformations.quaternion_from_euler(x[5,0],
                                                         # x[4,0],
-                                                        # x[5,0])
+                                                        # x[3,0])
+        quat = tf.transformations.quaternion_from_euler(x[3,0],
+                                                        x[4,0],
+                                                        x[5,0])
         quat = self.normalize_quat(quat)
         # Publish pose
         sonar_pose = PoseStamped()
@@ -374,7 +473,7 @@ class BundleAdjuster:
         self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
                                   quat, rospy.Time.now(),
                                   "bundle_adjustment/sonar_estimate",
-                                  "/rexrov/forward_sonar_optical_frame")
+                                  "/rexrov/sonar_pose")
         self.pose_pub.publish(sonar_pose)
         # Publish odometry
         sonar_pose = PoseWithCovariance()
@@ -387,7 +486,7 @@ class BundleAdjuster:
         sonar_pose.pose.orientation.w = quat[3]
         sonar_pose.covariance = R.ravel().tolist()
         sonar_odom = Odometry()
-        sonar_odom.header.frame_id = "/rexrov/forward_sonar_optical_frame"
+        sonar_odom.header.frame_id = "/rexrov/sonar_pose"
         sonar_odom.child_frame_id = "bundle_adjustment/sonar_estimate"
         sonar_odom.header.stamp = rospy.Time.now()
         sonar_odom.pose = sonar_pose

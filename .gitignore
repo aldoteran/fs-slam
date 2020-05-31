@@ -16,6 +16,10 @@ ehthumbs.db
 ############
 *.pyc
 
+# Pickle #
+############
+*.pkl
+
 # Latex #
 #########
 *.aux
