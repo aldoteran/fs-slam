@@ -29,7 +29,7 @@ class BundleAdjuster:
     TBA
     """
     def __init__(self, verbose=True, test=False, debug=False,
-                 benchmark=False, iters=5, svd_thresh=50):
+                 benchmark=False, iters=5, target_cond=50):
         # Flags
         self.is_test = test
         self.is_debug = debug
@@ -40,7 +40,7 @@ class BundleAdjuster:
         # GN params
         # TODO(aldoteran): add this to the config file
         self.iters = iters
-        self.svd_threshold = svd_thresh
+        self.target_cond = target_cond
         # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
         self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
         self.pointcloud = [[],[],[]]
@@ -63,7 +63,7 @@ class BundleAdjuster:
         self.tf_pub = tf.TransformBroadcaster()
         # self.tf_listener = tf.TransformListener(cache_time=rospy.Duration(20))
 
-    def compute_constraint(self, landmarks, theta_stddev=0.01, range_stddev=0.01):
+    def compute_constraint(self, landmarks, theta_stddev=0.01, range_stddev=0.015):
         """
         Compute sonar constraint using landmarks seen in two
         sonar images.
@@ -119,9 +119,8 @@ class BundleAdjuster:
             except:
                 return
             s_list = [np.max(S)/s for s in S]
-            thresh = np.argmin((np.asarray(s_list)/30.0 - 1)**2)
+            thresh = np.argmin((np.asarray(s_list)/self.target_cond - 1)**2)
             S[S<S[thresh]] = 0.0
-            # S[S<self.svd_threshold] = 0.0
             cond_nums.append(np.max(S)/np.min(S[np.nonzero(S)]))
 
             # (4) Update initial state
@@ -153,8 +152,8 @@ class BundleAdjuster:
             return
 
         #for debugging
-        import matplotlib.pyplot as plt
-        plt.plot(delta_norm_vector)
+        # import matplotlib.pyplot as plt
+        # plt.plot(delta_norm_vector)
 
         # Return the sate if in test mode
         if self.is_test:

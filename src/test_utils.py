@@ -581,7 +581,7 @@ def random_test_stddev(N, rot_stddev, pos_stddev):
         col = 0
         for s in range(10):
             adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True,
-                                    iters=10, svd_thresh=svds[s])
+                                    iters=10, target_cond=svds[s])
 
             # Pose error
             x_err = []
@@ -679,7 +679,7 @@ def random_test(N, rot_stddev, pos_stddev, M, iters, svd):
     Computes the error and plots the relevant data to evaluate the performance.
     """
     adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True,
-                            iters=iters, svd_thresh=svd)
+                            iters=iters, target_cond=svd)
     # Pose error
     x_err = []
     y_err = []
@@ -707,7 +707,6 @@ def random_test(N, rot_stddev, pos_stddev, M, iters, svd):
                                                                     # pos_stddev)
         except TypeError:
             continue
-        ax11.plot(cond_nums)
         # Translation error
         x_err.append(np.linalg.norm(Xb_true[0,-1] - relative_pose[0,-1]))
         y_err.append(np.linalg.norm(Xb_true[1,-1] - relative_pose[1,-1]))
@@ -775,7 +774,7 @@ def random_test_landmarks(N, rot_stddev, pos_stddev, M, iters, svd):
     Computes the error and plots the relevant data to evaluate the performance.
     """
     adjuster = BundleAdjuster(verbose=False, test=False, benchmark=True,
-                            iters=iters, svd_thresh=svd)
+                            iters=iters, target_cond=svd)
     # Pose error
     # landmark error
     range_err = []
