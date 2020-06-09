@@ -41,8 +41,9 @@ class BundleAdjuster:
         # TODO(aldoteran): add this to the config file
         self.iters = iters
         self.target_cond = target_cond
-        # self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
-        self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
+        self.phi_range = np.arange(-0.54977, 0.54977, 0.017453)
+        self.phi_range = np.arange(-0.34977, 0.34977, 0.017453)
+        # self.phi_range = np.arange(-0.1047, 0.1047, 0.0087)
         self.pointcloud = [[],[],[]]
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -190,7 +191,7 @@ class BundleAdjuster:
 
         return (x, z_a, z_b)
 
-    def _opt_phi_search(self, x, z_b, T_Xb, inv_sigma, N, landmarks):
+    def _opt_phi_search(self,axs, x, z_b, T_Xb, inv_sigma, N, landmarks):
         """
         Search for optimal phi using the list of phis in phi_range.
         """
@@ -253,11 +254,11 @@ class BundleAdjuster:
                     best_idx = i/2
             # for debugging
             if self.is_test:
-                # utils.plot_single_search(landmarks[i/2], polar, T_Xb, best_phi,
-                                        # old_error, rep_error, phi_x, phi_y, phi_z,
-                                        # q_x, q_y, q_z, self.phi_range, best_idx)
-                # utils.plot_rep_error(axs, j, k, rep_error, old_error, best_phi,
-                                    # landmarks[i/2].real_phi, self.phi_range, i/2)
+                utils.plot_single_search(landmarks[i/2], polar, T_Xb, best_phi,
+                                        old_error, rep_error, phi_x, phi_y, phi_z,
+                                        q_x, q_y, q_z, self.phi_range, best_idx)
+                utils.plot_rep_error(axs, j, k, rep_error, old_error, best_phi,
+                                    landmarks[i/2].real_phi, self.phi_range, i/2)
                 k += 1
                 if k > 4:
                     k = 2

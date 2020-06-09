@@ -9,7 +9,7 @@ import pickle
 import random
 
 import matplotlib
-matplotlib.rcParams['text.usetex'] = True
+# matplotlib.rcParams['text.usetex'] = True
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.patches import FancyArrowPatch
@@ -20,7 +20,7 @@ from matplotlib.text import Annotation
 import mpl_toolkits.mplot3d as mp3d
 
 from LandmarkDetector import Landmark
-from BundleAdjuster import BundleAdjuster
+# from BundleAdjuster import BundleAdjuster
 
 class Arrow3D(FancyArrowPatch):
         def __init__(self, xs, ys, zs, *args, **kwargs):
@@ -168,9 +168,11 @@ def polar_to_cart(polar):
 THETA_MAX = 0.6108
 THETA_MIN = -0.6108
 MAX_RANGE = 17.0
-MIN_RANGE = 0.5
-PHI_MAX = 0.1047
-PHI_MIN = 0.1047
+MIN_RANGE = 1.5
+PHI_MAX = 0.3447
+PHI_MIN = -0.3447
+# PHI_MAX = 0.1047
+# PHI_MIN = 0.1047
 
 def init_all_plots():
     fig, axs = plt.subplots(ncols=5, nrows=3)
