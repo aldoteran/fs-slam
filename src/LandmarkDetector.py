@@ -52,10 +52,10 @@ class Landmark:
             self.cart_img1 = np.array([[map1[0][self.pixels_img1]],
                                        [map1[1][self.pixels_img1]],
                                        [map1[2][self.pixels_img1]]])
-            # self.cart_img2 = np.array([[map2[0][self.pixels_img2]],
-                                       # [map2[1][self.pixels_img2]],
-                                       # [map2[2][self.pixels_img2]]])
-            self.cart_img2 = T_Xb[:-1,:-1].transpose().dot(self.cart_img1 - T_Xb[:-1,-1:])
+            self.cart_img2 = np.array([[map2[0][self.pixels_img2]],
+                                       [map2[1][self.pixels_img2]],
+                                       [map2[2][self.pixels_img2]]])
+            # self.cart_img2 = T_Xb[:-1,:-1].transpose().dot(self.cart_img1 - T_Xb[:-1,-1:])
             self.is_shit = False
             if (self.cart_img1 == 0).any() or (self.cart_img2 == 0).any():
                 self.is_shit = True
@@ -133,8 +133,8 @@ class LandmarkDetector:
         # Get pose
         sonar_frame = 'rexrov/sonar_pose'
         trans, rot = self.tf_listener.lookupTransform('/world',
-                                                      # sonar_frame,
-                                                     '/slam/dead_reckoning/sonar_pose',
+                                                      sonar_frame,
+                                                     # '/slam/dead_reckoning/sonar_pose',
                                                       # '/slam/dead_reckoning/base_pose',
                                                       rospy.Time(0))
         pose = tf.transformations.quaternion_matrix(rot)
@@ -228,7 +228,7 @@ class LandmarkDetector:
         self.landmarks = np.asarray(self.landmarks)[inliers]
         # Get 18 lucky landmarks
         try:
-            lucky = random.sample(range(len(self.landmarks)), 30)
+            lucky = random.sample(range(len(self.landmarks)), 18)
             self.landmarks = self.landmarks[lucky].tolist()
         except:
             self.landmarks = self.landmarks.tolist()

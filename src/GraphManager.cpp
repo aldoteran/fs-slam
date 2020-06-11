@@ -34,10 +34,10 @@ void GraphManager::SetupNoiseModels() {
       prior_rot_stddev_, prior_rot_stddev_, prior_rot_stddev_;
     prior_noise_ = gtsam::noiseModel::Diagonal::Sigmas(prior_sigmas);
     // Setup the sonar two view noise model.
-    //gtsam::Vector sonar_sigmas(6);
-    //sonar_sigmas << sonar_pos_stddev_, sonar_pos_stddev_, sonar_pos_stddev_,
-      //sonar_rot_stddev_, sonar_rot_stddev_, sonar_rot_stddev_;
-    //sonar_noise_ = gtsam::noiseModel::Diagonal::Sigmas(sonar_sigmas);
+    gtsam::Vector sonar_sigmas(6);
+    sonar_sigmas << sonar_pos_stddev_, sonar_pos_stddev_, sonar_pos_stddev_,
+      sonar_rot_stddev_, sonar_rot_stddev_, sonar_rot_stddev_;
+    sonar_noise_ = gtsam::noiseModel::Diagonal::Sigmas(sonar_sigmas);
     // Setup the sonar two view noise model.
     gtsam::Vector sonar_ex_sigmas(6);
     sonar_ex_sigmas << sonar_ex_pos_stddev_, sonar_ex_pos_stddev_, sonar_ex_pos_stddev_,
@@ -70,7 +70,7 @@ void GraphManager::SetupOdometers() {
     // NOTE(tonioteran) this chooses a particular direction for the gravity
     // vector, explained here https://gtsam.org/doxygen/a00698_source.html.
     boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> p =
-      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(9.8);
+      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedD(-9.8);
 
     // TODO(tonioteran): pull out to params yaml.
     // This parameters are explained here: https://gtsam.org/doxygen/a03439.html
@@ -161,14 +161,14 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     //std::cout << " ---------- Running iSAM for frame: " << cur_frame_;
     //std::cout << " ----------" << std::endl;
 
-    // Sonar constraint Covariance
-    sonar_covariance_ = gtsam::noiseModel::Gaussian::Covariance(R);
+    // Sonar constraint square root factor
+    sonar_covariance_ = gtsam::noiseModel::Gaussian::SqrtInformation(R);
 
     // Get odometry
-    //gtsam::NavState prop_state = odometer_->predict(cur_state_estimate_,
-                                                    //cur_imu_bias_);
-    gtsam::NavState prop_state = accumulator_->predict(initial_state_,
-                                                       gtsam::imuBias::ConstantBias());
+    gtsam::NavState prop_state = odometer_->predict(cur_state_estimate_,
+                                                    cur_imu_bias_);
+    //gtsam::NavState prop_state = accumulator_->predict(initial_state_,
+                                                       //gtsam::imuBias::ConstantBias());
     gtsam::Pose3 prop_pose = prop_state.pose();
     // Get estimated pose from ISAM2
     gtsam::Pose3 prev_pose = isam2_.calculateEstimate<gtsam::Pose3>(
@@ -215,8 +215,8 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     // Update ISAM2
     isam2_.update(graph_, initial_estimates_);
 
-    for(int k = 0; k < 3; k++)
-        isam2_.update();
+    //for(int k = 0; k < 1; k++)
+        //isam2_.update();
     gtsam::Values results = isam2_.calculateEstimate();
 
     // Update current state and bias with iSAM2 optimized values

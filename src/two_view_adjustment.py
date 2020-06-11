@@ -21,7 +21,7 @@ def main():
     rospy.init_node('two_view_sonar_adjustment')
     rospy.loginfo("Initializing Two-View sonar bundle adjustment.")
     detector = LandmarkDetector(verbose=is_verbose)
-    adjuster = BundleAdjuster(verbose=is_verbose, iters=6)
+    adjuster = BundleAdjuster(verbose=is_verbose, iters=10)
     rospy.sleep(0.5)
     # wait for buffer to fill up
     img2 = detector.img_buff
