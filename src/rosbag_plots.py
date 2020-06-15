@@ -55,7 +55,7 @@ def plot_all(dead_reckoning, estimated, true):
                 s=120, label='Start')
     plt.scatter([true[-1,0],estimated[-1,0],dead_reckoning[-1,0]],
                 [true[-1,1],estimated[-1,1],dead_reckoning[-1,1]],
-                marker='*', color='y', edgecolors='k', s=300, label='Goal')
+                marker='*', color='y', edgecolors='k', s=300, label='End')
     plt.title("Path", size=18, style='oblique')
     plt.xlabel("X", size=14, style='oblique')
     plt.ylabel("Y", size=14, style='oblique')

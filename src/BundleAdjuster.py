@@ -112,7 +112,7 @@ class BundleAdjuster:
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
             cond_nums = [np.max(S)/s for s in S]
-            thresh = np.argmin((np.asarray(cond_nums)/20.0 - 1)**2)
+            thresh = np.argmin((np.asarray(cond_nums)/50.0 - 1)**2)
             S[S<thresh] = 0.0
 
             # (4) Update initial state
@@ -419,8 +419,10 @@ class BundleAdjuster:
         sonar_constraint.pose.pose.orientation.y = quat[1]
         sonar_constraint.pose.pose.orientation.z = quat[2]
         sonar_constraint.pose.pose.orientation.w = quat[3]
-        # sonar_constraint.pose.covariance = R.ravel().tolist()
-        sonar_constraint.pose.covariance = np.eye(6).ravel().tolist()
+        R = np.eye(6)
+        R[2,2] = 10
+        sonar_constraint.pose.covariance = R.ravel().tolist()
+        # sonar_constraint.pose.covariance = np.eye(6).ravel().tolist()
         self.pose_constraint_pub.publish(sonar_constraint)
         self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
                                   quat, rospy.Time.now(),
