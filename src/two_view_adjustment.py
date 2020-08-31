@@ -15,32 +15,31 @@ __author_email__ = "aldot@kth.se, teran@mit.edu"
 __status__ = "Development"
 
 is_verbose = rospy.get_param("verbose")
+freq = rospy.get_param("freq")
 
 def main():
     rospy.sleep(1.0)
     rospy.init_node('two_view_sonar_adjustment')
     rospy.loginfo("Initializing Two-View sonar bundle adjustment.")
     detector = LandmarkDetector(verbose=is_verbose)
-    adjuster = BundleAdjuster(verbose=is_verbose, iters=10)
+    adjuster = BundleAdjuster(verbose=is_verbose, iters=1)
     rospy.sleep(0.5)
     # wait for buffer to fill up
-    img2 = detector.img_buff.pop(0)
-    maps_img2 = detector.polar_map_buff.pop(0)
-    rate = rospy.Rate(10)
+    img2 = detector.img_buff
+    maps_img2 = detector.polar_map_buff
+    rate = rospy.Rate(freq)
     while not rospy.is_shutdown():
         tic = time.time()
-        if len(detector.img_buff) == 0 or len(detector.polar_map_buff) == 0:
-            continue
         img1 = img2
-        img2 = detector.img_buff.pop(0)
+        img2 = detector.img_buff
         maps_img1 = maps_img2
-        maps_img2 = detector.polar_map_buff.pop(0)
+        maps_img2 = detector.polar_map_buff
         features = detector.extract_n_match([img1, img2])
         landmarks = detector.generate_landmarks([img1, img2], features,
                                                 [maps_img1, maps_img2])
         if landmarks == None or len(landmarks) == 0:
             continue
-        adjuster.compute_constraint(landmarks)
+        adjuster.compute_constraint(landmarks, Xa=img1[-1], Xb=img2[-1])
         toc = time.time()
         rospy.loginfo("Computed constraint in {} seconds".format(toc-tic))
         rate.sleep()

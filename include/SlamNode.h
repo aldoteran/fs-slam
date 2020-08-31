@@ -48,12 +48,16 @@ class SlamNode {
 
   /// Publish hitherto dead reckoned path.
   void PublishDeadReckonPath();
+  /// Publish hitherto dead reckoned path.
+  void PublishImuOdomPath();
   /// Publish optimized path.
   void PublishOptimizedPath(Eigen::Affine3d pose);
   /// Publish the true path from gazebo.
   void PublishTruePath();
   /// Used for debugging, publishes the sonar TF to the optimized path.
   void PublishSonarTF();
+  //! Initializes the state
+  void InitState();
 
   // Utilities. TODO(tonioteran) Should move to external file.
   geometry_msgs::PoseStamped TransformToPose(const Eigen::Affine3d &tfm);
@@ -65,8 +69,6 @@ class SlamNode {
   void SetupRos();
   //! Initializes the backend SLAM object using defined parameters.
   void InitGraphManager();
-  //! Initializes the state
-  void InitState();
 
   //! Ros node handle.
   ros::NodeHandle nh_;
@@ -82,7 +84,7 @@ class SlamNode {
   //! Subscriber for the IMU information.
   ros::Subscriber imu_meas_sub_;
   //! Topic in which the IMU measurements are being received.
-  std::string imu_meas_topic_ = "/rexrov/imu";
+  std::string imu_meas_topic_ = "/imu/data";
   //! Callback for the IMU measurements subscriber.
   void ImuMeasCallback(const sensor_msgs::Imu &msg);
 
@@ -110,7 +112,13 @@ class SlamNode {
   std::string dead_reckoning_topic_ = "/slam/dead_reckoning/path";
   //! Default name for frame in which the static SLAM path is expressed.
   std::string dead_reckoning_frame_id_ = "world";
-  //
+
+  //! Publisher for SLAM dead reckoning path.
+  ros::Publisher imu_odom_pub_;
+  nav_msgs::Path imu_odom_path_;
+  //! Default name for static SLAM trajectory path.
+  std::string imu_odom_topic_ = "/slam/imu_odom/path";
+
   //! Publisher for SLAM dead reckoning path.
   ros::Publisher optimized_pose_pub_;
   nav_msgs::Path optimized_pose_path_;
@@ -143,6 +151,9 @@ class SlamNode {
   //! Standard deviation parameter for IMU's angluar velocity component [???].
   Eigen::Vector3d imu_omega_noise_stddev_;
   Eigen::Vector3d imu_omega_bias_stddev_;
+  //! Initial biases for the IMU's accelerometer and gyroscope
+  Eigen::Vector3d init_accel_bias_;
+  Eigen::Vector3d init_gyro_bias_;
 
   /// IMU measurements sampling frequency [s].
   double imu_dt_ = 0.02;  // 50 Hz.
@@ -152,6 +163,10 @@ class SlamNode {
 
   //! Counter for the nodes in the Factor Graphs
   int node_count_ = 0;
+
+  //! Initial pose and flag
+  gtsam::Pose3 init_pose_;
+  bool is_init = false;
 };
 
 }  // namespace fsslam

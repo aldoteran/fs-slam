@@ -1,0 +1,80 @@
+<!--
+   Run the fiducial_slam node
+-->
+<launch>
+
+  <!-- namespace for camera input -->
+  <arg name="camera" default="usb_cam"/>
+  <arg name="fiducial_len" default="0.14"/>
+  <arg name="dictionary" default="7"/>
+  <arg name="do_pose_estimation" default="true"/>
+  <arg name="ignore_fiducials" default="" />
+  <arg name="fiducial_len_override" default="" />
+
+  <node pkg="aruco_detect" name="aruco_detect"
+    type="aruco_detect" output="screen" respawn="false">
+    <param name="publish_images" value="true" />
+    <param name="fiducial_len" value="$(arg fiducial_len)"/>
+    <param name="dictionary" value="$(arg dictionary)"/>
+    <param name="do_pose_estimation" value="$(arg do_pose_estimation)"/>
+    <param name="ignore_fiducials" value="$(arg ignore_fiducials)"/>
+    <param name="fiducial_len_override" value="$(arg fiducial_len_override)"/>
+    <remap from="/camera"
+        to="/usb_cam/image_raw"/>
+    <remap from="/camera_info" to="camera/camera_info"/>
+  </node>
+
+  ## CameraInfo publisher node ##
+  <!--Logitech webcam-->
+  <param name="camera_calib_filename" type="str"
+         value="$(find fs-slam)/params/logitechc920.yaml" />
+  <node pkg="fs-slam" type="yaml_to_camera_info_publisher.py"
+        name="camera_info_pub" output="screen" />
+
+  <arg name="map_frame" default="world"/>
+  <arg name="odom_frame" default="odom"/>
+  <arg name="base_frame" default="fiducials/base_pose"/>
+  <arg name="publish_tf" default="true"/>
+  <arg name="tf_publish_interval" default="0.1"/>
+  <arg name="future_date_transforms" default="0.0"/>
+  <arg name="publish_6dof_pose" default="true"/>
+  <arg name="systematic_error" default="0.01"/>
+  <arg name="covariance_diagonal" default="[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]"/>
+
+  <node pkg="tf" type="static_transform_publisher" name="camera_to_imu_base"
+      args="0 0 0 3.14159 0 -1.5707 usb_cam fiducials/base_pose 5"/>
+  <!--<node pkg="tf" type="static_transform_publisher" name="map_to_fid12"-->
+      <!--args="-0.29 -0.10 0.81  3.14159 0 1.5707 fiducial_12 world 1"/>-->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_fid15"
+      args="0.08 -0.13 0.81  3.14159 0 1.5707 fiducial_15 world 1"/>
+  <!--<node pkg="tf" type="static_transform_publisher" name="fid15_to_fid16"-->
+      <!--args="0.1897 -0.107 0.8236 3.13 -0.0193 1.5404 fiducial_16 world 1"/>-->
+  <node pkg="tf" type="static_transform_publisher" name="base_to_sonar_fiducials"
+      args="-0.003125 -0.05 -1.1851 -0.0079 0.0136 -3.1227
+            /fiducials/base_pose
+            /fiducials/sonar_pose 1"/>
+
+  <node type="fiducial_slam" pkg="fiducial_slam" output="screen"
+    name="fiducial_slam">
+    <param name="map_file" value="$(find fs-slam)/utils/tank_map.txt" />
+    <param name="read_only_map" value="false" />
+    <param name="frame_id" value="fiducial/base_pose" />
+    <param name="map_frame" value="$(arg map_frame)" />
+    <param name="odom_frame" value="$(arg odom_frame)" />
+    <param name="base_frame" value="$(arg base_frame)" />
+    <param name="publish_tf" value="$(arg publish_tf)" />
+    <param name="tf_publish_interval" value="$(arg tf_publish_interval)" />
+    <param name="future_date_transforms" value="$(arg future_date_transforms)" />
+    <param name="publish_6dof_pose" value="$(arg publish_6dof_pose)" />
+    <param name="do_pose_estimation" value="$(arg do_pose_estimation)"/>
+    <param name="sum_error_in_quadrature" value="true"/>
+    <param name="fiducial_len" value="$(arg fiducial_len)"/>
+    <param name="covariance_diagonal" value="$(arg covariance_diagonal)"/>
+    <remap from="/camera_info" to="$(arg camera)/camera_info"/>
+  </node>
+
+  ### Run TF to path node ###
+  <node pkg="fs-slam" name="tf_to_path" type="tf_to_path.py"
+        output="screen" />
+
+</launch>

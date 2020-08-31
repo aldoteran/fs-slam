@@ -14,7 +14,7 @@ SlamNode::SlamNode() {
   ReadParams();
   SetupRos();
   InitGraphManager();
-  InitState();
+  //InitState();
 }
 
 SlamNode::~SlamNode() {}
@@ -49,9 +49,17 @@ void SlamNode::ReadParams() {
   nh_.getParam("gyro_bias_x", imu_omega_bias_stddev_(0));
   nh_.getParam("gyro_bias_y", imu_omega_bias_stddev_(1));
   nh_.getParam("gyro_bias_z", imu_omega_bias_stddev_(2));
+  // Previously estimated initial biases
+  nh_.getParam("init_accel_bias_x", init_accel_bias_(0));
+  nh_.getParam("init_accel_bias_y", init_accel_bias_(1));
+  nh_.getParam("init_accel_bias_z", init_accel_bias_(2));
+  nh_.getParam("init_gyro_bias_x", init_gyro_bias_(0));
+  nh_.getParam("init_gyro_bias_y", init_gyro_bias_(1));
+  nh_.getParam("init_gyro_bias_z", init_gyro_bias_(2));
+
 
   // Sensor parameters.
-  double imu_frequency = 50;  // [Hz]
+  double imu_frequency = 25;  // [Hz]
   nh_.getParam("imu_frequency", imu_frequency);
   imu_dt_ = 1.0 / imu_frequency;
 }
@@ -68,6 +76,10 @@ void SlamNode::SetupRos() {
   dead_reckoning_pub_ =
       nh_.advertise<nav_msgs::Path>(dead_reckoning_topic_, 1000);
   dead_reckoning_path_.header.frame_id = dead_reckoning_frame_id_;
+  // Setup the static SLAM path publisher for imu odom trajectory.
+  imu_odom_pub_ =
+      nh_.advertise<nav_msgs::Path>(imu_odom_topic_, 1000);
+  imu_odom_path_.header.frame_id = dead_reckoning_frame_id_;
   // Setup the static SLAM path publisher for the optimized trajectory.
   optimized_pose_pub_ =
       nh_.advertise<nav_msgs::Path>(optimized_pose_topic_, 1000);
@@ -77,29 +89,48 @@ void SlamNode::SetupRos() {
       nh_.advertise<nav_msgs::Path>(true_pose_topic_, 1000);
   true_path_.header.frame_id = true_pose_frame_id_;
 
+
 }
 
 void SlamNode::InitGraphManager() {
   gm_ = std::make_unique<GraphManager>(prior_pos_stddev_, prior_rot_stddev_,
                                        imu_accel_noise_stddev_, imu_omega_noise_stddev_,
-                                       imu_accel_bias_stddev_, imu_omega_bias_stddev_);
+                                       imu_accel_bias_stddev_, imu_omega_bias_stddev_,
+                                       init_accel_bias_, init_gyro_bias_);
 }
 
 void SlamNode::InitState() {
-    gm_->InitFactorGraph(gtsam::Pose3());
+    //if (is_init_ == true){
+    gm_->InitFactorGraph(init_pose_);
     // Publish first optimized pose and TF
-    PublishOptimizedPath(Eigen::Affine3d());
+    PublishOptimizedPath(Eigen::Affine3d(init_pose_.matrix()));
+    //}
 }
 
 void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
-  Eigen::Vector3d accel = {msg.linear_acceleration.x, msg.linear_acceleration.y,
-                           msg.linear_acceleration.z};
-  Eigen::Vector3d omega = {msg.angular_velocity.x, msg.angular_velocity.y,
-                           msg.angular_velocity.z};
+    double qx = msg.orientation.x;
+    double qy = msg.orientation.y;
+    double qz = msg.orientation.z;
+    double qw = msg.orientation.w;
+    gtsam::Point3 trans(0.0,0.0,0.0);
+    gtsam::Rot3 rot = gtsam::Rot3(qw, qx, qy, qz);
 
-  gm_->AddImuMeasurement(accel, omega, imu_dt_);
+    if (is_init_ == false){
+        init_pose_ = gtsam::Pose3(rot, trans);
+        is_init_ = true;
+        ROS_WARN("IMU orientation obtained.");
+    }
 
-  PublishDeadReckonPath();
+    gtsam::Rot3 orientation(rot);
+    Eigen::Vector3d accel = {msg.linear_acceleration.x, msg.linear_acceleration.y,
+                             msg.linear_acceleration.z};
+    Eigen::Vector3d omega = {msg.angular_velocity.x, msg.angular_velocity.y,
+                             msg.angular_velocity.z};
+
+    gm_->AddImuMeasurement(accel, omega, orientation, imu_dt_);
+
+    PublishDeadReckonPath();
+    PublishImuOdomPath();
 }
 
 void SlamNode::SonarPoseCallback(
@@ -170,22 +201,19 @@ void SlamNode::PublishDeadReckonPath() {
                     dead_reckoning_frame_id_, "/slam/dead_reckoning/base_pose"));
 }
 
-void SlamNode::PublishTruePath() {
-    tf::StampedTransform transform;
-    ros::Time now = ros::Time::now();
-    Eigen::Affine3d pose;
-    // get TF from world to base link
-    tf_listener_.waitForTransform(map_frame_id_, imu_frame_id_,
-                                now, ros::Duration(5.0));
-    tf_listener_.lookupTransform(map_frame_id_, "rexrov/base_link",
-                                now, transform);
-    tf::transformTFToEigen(transform, pose);
+void SlamNode::PublishImuOdomPath() {
+    // Update our path with the latest pose.
+    Eigen::Affine3d pose = gm_->GetImuOdom();
     geometry_msgs::PoseStamped pose_msg = TransformToPose(pose);
-    // Publish path
-    pose_msg.header.frame_id = true_pose_frame_id_;
-    true_path_.poses.push_back(pose_msg);
+    pose_msg.header.frame_id = dead_reckoning_frame_id_;
+    imu_odom_path_.poses.push_back(pose_msg);
     // Publish updated path onto topic.
-    true_pose_pub_.publish(true_path_);
+    imu_odom_pub_.publish(imu_odom_path_);
+    // Publish the updated pose on the TF server
+    tf::Transform transform_;
+    tf::poseEigenToTF(pose, transform_);
+    br_.sendTransform(tf::StampedTransform(transform_, ros::Time::now(),
+                    dead_reckoning_frame_id_, "/slam/imu_odom/base_pose"));
 }
 
 void SlamNode::PublishSonarTF() {
@@ -205,12 +233,20 @@ void SlamNode::PublishSonarTF() {
 int main(int argc, char **argv) {
   ros::init(argc, argv, "slam_node");
 
+  bool is_init = false;
+  int i = 0;
   fsslam::SlamNode slam_node;
   ros::Rate loop_rate(slam_node.loop_rate_);
+  ros::Duration(1.0).sleep();
 
   while (ros::ok()) {
     ros::spinOnce();
     loop_rate.sleep();
+    i++;
+    if (i == 2){
+      slam_node.InitState();
+      is_init = true;
+    }
   }
 
   return 0;

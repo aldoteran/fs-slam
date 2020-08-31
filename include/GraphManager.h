@@ -45,7 +45,9 @@ class GraphManager {
                const Eigen::Vector3d imu_accel_noise_stddev,
                const Eigen::Vector3d imu_omega_noise_stddev,
                const Eigen::Vector3d imu_accel_bias_stddev,
-               const Eigen::Vector3d imu_omega_bias_stddev);
+               const Eigen::Vector3d imu_omega_bias_stddev,
+               const Eigen::Vector3d init_accel_bias,
+               const Eigen::Vector3d init_gyro_bias);
   virtual ~GraphManager();
 
   /// Predict dead reckoning pose using the accumulated IMU measurements.
@@ -58,7 +60,7 @@ class GraphManager {
     return Eigen::Affine3d(odometry_.matrix());
   }
 
-  /// Return the sonar eextrinsics (for debugging)
+  /// Return the sonar extrinsics (for debugging)
   inline const Eigen::Affine3d GetSonarExtrinsics() const {
     return Eigen::Affine3d(sonar_extrinsics_.matrix());
   }
@@ -76,6 +78,7 @@ class GraphManager {
   /// Preintegrates an IMU measurement onto the `odometer_` and `accumulator_`.
   void AddImuMeasurement(const Eigen::Vector3d &accel,
                          const Eigen::Vector3d &omega,
+                         const gtsam::Rot3 &orientation,
                          const double dt);
   /// Adds IMU factors and updates Bayes tree with iSAM2.
   Eigen::Affine3d AddFactors(gtsam::Pose3 sonar_constraint,
@@ -85,6 +88,7 @@ class GraphManager {
   void InitFactorGraph(const gtsam::Pose3 &pose);
   //! Initial pose in the world frame when starting
   gtsam::NavState initial_state_;
+  gtsam::Pose3 initial_pose_;
 
  private:
   //! Initialize the noise models using specified parameters.
@@ -118,17 +122,18 @@ class GraphManager {
   gtsam::noiseModel::Diagonal::shared_ptr imu_noise_;
   gtsam::noiseModel::Diagonal::shared_ptr imu_bias_noise_;
   //! Standard deviation parameter for IMU's acceleration components.
-  //const double imu_accel_stddev_ = 16.0e-3;  // [m/s2], from gazebo.
   Eigen::Vector3d imu_accel_noise_stddev_;
   //! Standard deviation parameter for IMU's angular velocity components.
-  //const double imu_omega_stddev_ = 0.02476;  // [rad/s], from gazebo.
   Eigen::Vector3d imu_omega_noise_stddev_;
   //! Stddev for bias parameter for IMU's acceleration components.
-  //const double imu_accel_bias_stddev_ = 24.0e-3; // [m/s2], from gazebo.
   Eigen::Vector3d imu_accel_bias_stddev_;
   //! Stddev for bias parameter for IMU's angular velocity components.
-  //const double imu_omega_bias_stddev_ = 1.55e-4; // [rad/s], from gazebo.
   Eigen::Vector3d imu_omega_bias_stddev_;
+  //! Initial bias for the IMU's accelerometer
+  Eigen::Vector3d init_accel_bias_;
+  //! Initial bias for the IMU's gyroscope
+  Eigen::Vector3d init_gyro_bias_;
+
 
   //! Setup iSAM's optimization and inference parameters.
   void SetupiSAM();
@@ -145,6 +150,8 @@ class GraphManager {
   gtsam::Pose3 cur_pose_estimate_ = gtsam::Pose3();
   //! Contains the hitherto dead reckoning pose estimate (initially at origin).
   gtsam::Pose3 dead_reckoning_ = gtsam::Pose3();
+  //! Contains the hitherto dead reckoning state estimate (initially at origin).
+  gtsam::NavState dead_reckoned_state_ = gtsam::NavState();
   //! Contains the hitherto IMU odometry pose estimate (initially at origin).
   gtsam::Pose3 odometry_ = gtsam::Pose3();
   //! Contains the latest estimate of the velocity.
@@ -154,9 +161,10 @@ class GraphManager {
 
   //! Sonar extrinsics base (imu) link to sonar optical frame.
   // TODO(aldoteran): grab this to config file
-  gtsam::Point3 sonar_trans = gtsam::Point3(-0.02484, 0.14525, -1.22172);
+  gtsam::Point3 sonar_trans = gtsam::Point3(-0.003125, -0.05, -1.1851);
   // Zero Pitch
-  gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.21936, 0.93477, -0.06936, -0.27065);
+  gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.00948389, 0.99992392,
+                                      -0.00405017, -0.0067683);
   // 15 degree pitch
   //gtsam::Rot3 sonar_rot = gtsam::Rot3(-0.215152, 0.8903867, -0.07935, -0.39322);
   gtsam::Pose3 sonar_extrinsics_ = gtsam::Pose3(sonar_rot, sonar_trans);
@@ -168,6 +176,8 @@ class GraphManager {
       nullptr;
   /// Instantiates odometers with custom properties.
   void SetupOdometers();
+  /// IMU init flag
+  bool imu_init_ = false;
 
   //! Factor graph for new observations.
   gtsam::NonlinearFactorGraph graph_;

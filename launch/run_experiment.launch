@@ -1,10 +1,10 @@
 <launch>
 
 	<!--Oculus main node-->
-	<include file="$(find oculus_sonar)/launch/oculus_sonar.launch" />
+    <include file="$(find oculus_sonar)/launch/oculus_sonar.launch" />
 
 	<!--Run SBG ellipse AHRS-->
-	<include file="$(find fs-slam)/launch/sbg_device.launch" />
+    <include file="$(find fs-slam)/launch/sbg_device.launch" />
 
 	<!--Logitech Camera run-->
 	<node name="usb_cam" pkg="usb_cam" type="usb_cam_node" output="screen" >

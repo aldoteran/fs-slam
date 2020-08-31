@@ -37,7 +37,7 @@ class BundleAdjuster:
     """
     TBA
     """
-    def __init__(self, iters=10, bearing_stddev=0.05, range_stddev=0.05,
+    def __init__(self, iters=10, bearing_stddev=0.01, range_stddev=0.01,
                  vertical_aperture=0.1047, vertical_resolution=0.017, verbose=False):
 
         # Sonar odometry pose
@@ -54,6 +54,7 @@ class BundleAdjuster:
         # Flags
         self.is_verbose = verbose
         self.is_singular = False
+        self.is_nan = False
         self.degeneracy_factors = Float32MultiArray()
         #### PUBLISHERS ####
         self.pose_pub = rospy.Publisher('/bundle_adjustment/sonar_pose',
@@ -95,13 +96,13 @@ class BundleAdjuster:
         # Initialize sate
         N = len(landmarks)
         T_Xb = np.linalg.inv(Xa).dot(Xb)
+        # T_Xb = np.eye(4)
         x_init, z_a, z_b = self._init_state_manifold(landmarks, Xb, T_Xb, N)
 
         phis = self._opt_phi_search(x_init, z_b, T_Xb, N)
-        # phis = [l.real_phi for l in landmarks]
 
         # Stop condition
-        epsilon = 1e-6
+        epsilon = 0.05
 
         # Gauss-Newton NLS optimization
         for it in range(self.iters):
@@ -112,21 +113,26 @@ class BundleAdjuster:
             # (3) SVD of A and thresholding of singular values
             U, S, V = np.linalg.svd(A, full_matrices=False)
             cond_nums = [np.max(S)/s for s in S]
-            thresh = np.argmin((np.asarray(cond_nums)/50.0 - 1)**2)
+            thresh = np.argmin((np.asarray(cond_nums)/100.0 - 1)**2)
+            # S[S<50.0] = 0.0
             S[S<thresh] = 0.0
 
             # (4) Update initial state
             A_d = U.dot(np.diag(S)).dot(V)
             delta = np.linalg.pinv(A_d).dot(b)
             x_init, T_Xb = self._update_state_manifold(x_init, delta, T_Xb)
+            if self.is_nan:
+                self.is_nan = False
+                return
 
             # (5) Check if converged
+            # pdb.set_trace()
             if np.linalg.norm(delta) < epsilon or it >= self.iters:
                 break
 
         R_sqrt = self._get_sqrt_information(S, V)
         if self.is_singular:
-            rospy.logerr("Singular matrix found while computing0covariance")
+            rospy.logerr("Singular matrix found while computing covariance")
             self.is_singular = False
             return
 
@@ -139,9 +145,9 @@ class BundleAdjuster:
             rospy.loginfo("Y: {}".format(T_Xb[1,-1]))
             rospy.loginfo("Z: {}".format(T_Xb[2,-1]))
         self._publish_pose_constraint(T_Xb, R_sqrt)
-        self._publish_pose(R_sqrt, T_Xb)
-        self._publish_true_odom(Xb)
-        self._publish_pointcloud(x_init, phis)
+        # self._publish_pose(R_sqrt, T_Xb)
+        # self._publish_true_odom(Xb)
+        # self._publish_pointcloud(x_init, phis)
 
     def _init_state_manifold(self, landmarks, Xb, T_Xb, N):
         x = np.zeros((6+2*N, 1))
@@ -226,7 +232,7 @@ class BundleAdjuster:
         # Get logmap of R to insert in inital state
         log_phi = np.arccos((np.trace(rot)-1)/2)
         # TODO(aldoteran): check if need to wrap to pi
-        omega_hat = log_phi/2*np.sin(log_phi) * (rot - rot.transpose())
+        omega_hat = (log_phi/(2*np.sin(log_phi))) * (rot - rot.transpose())
         omega = np.array([[omega_hat[-1,1]],
                           [omega_hat[0,-1]],
                           [omega_hat[1,0]]])
@@ -247,9 +253,9 @@ class BundleAdjuster:
         u = delta_x[0:3,:]
         omega = delta_x[3:6,:]
         omega_norm = np.linalg.norm(omega)
-        omega_hat = np.array([[0, -omega[2,0], omega[1,0]],
-                              [omega[2,0], 0, -omega[0,0]],
-                              [-omega[1,0], omega[0,0], 0]])
+        omega_hat = np.array([[0., -omega[2,0], omega[1,0]],
+                              [omega[2,0], 0., -omega[0,0]],
+                              [-omega[1,0], omega[0,0], 0.]])
 
         A = np.eye(3)
         A += omega_hat * (1-np.cos(omega_norm))/omega_norm**2
@@ -258,6 +264,9 @@ class BundleAdjuster:
         exp_omega = np.eye(3)
         exp_omega += omega_hat * np.sin(omega_norm)/omega_norm
         exp_omega += omega_hat**2 * (1-np.cos(omega_norm))/omega_norm**2
+        if np.isnan(exp_omega).any():
+            self.is_nan = True
+            return (0,0)
 
         rot_Xb = T_Xb[:-1,:-1]
         trans_Xb = T_Xb[:-1,-1:]
@@ -284,7 +293,6 @@ class BundleAdjuster:
         H_a = np.zeros((2*N, 6+2*N))
         for i in range(0,2*N,2):
             H_a[i:i+2,6+i:6+i+2] = sqrt_sigma
-            # H_a[i:i+2,6+i:6+i+2] = np.eye(2)
 
         # Then H_b
         H_b = np.zeros(H_a.shape)
@@ -309,7 +317,6 @@ class BundleAdjuster:
                              [-qy, qx, 0., 0., 0., -1.0]])
             # Whiten and add to Jacobian
             H_b[i:i+2,0:6] = sqrt_sigma.dot(zhat_q.dot(q_xb))
-            # H_b[i:i+2,0:6] = zhat_q.dot(q_xb)
 
             q_p = R_b.transpose()
             p_mi = np.array([[-rang*np.sin(theta)*np.cos(phi),
@@ -319,7 +326,6 @@ class BundleAdjuster:
                              [0., np.sin(phi)]])
             # Whiten and add
             H_b[i:i+2,6+i:6+i+2] = sqrt_sigma.dot(zhat_q.dot(q_p).dot(p_mi))
-            # H_b[i:i+2,6+i:6+i+2] = zhat_q.dot(q_p).dot(p_mi)
 
         return np.vstack((H_a, H_b))
 
@@ -419,16 +425,17 @@ class BundleAdjuster:
         sonar_constraint.pose.pose.orientation.y = quat[1]
         sonar_constraint.pose.pose.orientation.z = quat[2]
         sonar_constraint.pose.pose.orientation.w = quat[3]
-        R = np.eye(6)
-        R[2,2] = 10
+        R = np.eye(6) *0.0001
+        # R[2,2] = 10k0
+        # R[]
         sonar_constraint.pose.covariance = R.ravel().tolist()
         # sonar_constraint.pose.covariance = np.eye(6).ravel().tolist()
         self.pose_constraint_pub.publish(sonar_constraint)
-        self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
-                                  quat, rospy.Time.now(),
-                                  "bundle_adjustment/sonar_pose_constraint",
-                                  # "slam/dead_reckoning/sonar_pose")
-                                  "rexrov/sonar_pose")
+        # self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
+                                  # quat, rospy.Time.now(),
+                                  # "bundle_adjustment/sonar_pose_constraint",
+                                  # # "slam/dead_reckoning/sonar_pose")
+                                  # "rexrov/sonar_pose")
 
     def _publish_pose(self, R, T_Xb):
         """

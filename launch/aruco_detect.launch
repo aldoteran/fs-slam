@@ -1,0 +1,33 @@
+<!-- Run the aruco_detect node -->
+<launch>
+  <!-- namespace for camera input -->
+  <arg name="camera" default="/camera"/>
+  <arg name="image" default="image_raw"/>
+  <arg name="transport" default="raw"/>
+  <arg name="fiducial_len" default="0.14"/>
+  <arg name="dictionary" default="7"/>
+  <arg name="do_pose_estimation" default="true"/>
+  <arg name="ignore_fiducials" default="false" />
+  <arg name="fiducial_len_override" default="" />
+
+  <node pkg="aruco_detect" name="aruco_detect"
+    type="aruco_detect" output="screen" respawn="false">
+    <param name="image_transport" value="$(arg transport)"/>
+    <param name="publish_images" value="true" />
+    <param name="fiducial_len" value="$(arg fiducial_len)"/>
+    <param name="dictionary" value="$(arg dictionary)"/>
+    <param name="do_pose_estimation" value="$(arg do_pose_estimation)"/>
+    <param name="ignore_fiducials" value="$(arg ignore_fiducials)"/>
+    <param name="fiducial_len_override" value="$(arg fiducial_len_override)"/>
+    <remap from="/camera"
+        to="/usb_cam/image_raw"/>
+    <remap from="/camera_info" to="$(arg camera)/camera_info"/>
+  </node>
+
+  ## CameraInfo publisher node ##
+  <!--Logitech webcam-->
+  <param name="camera_calib_filename" type="str"
+         value="$(find fs-slam)/params/logitechc920.yaml" />
+  <node pkg="fs-slam" type="yaml_to_camera_info_publisher.py"
+        name="camera_info_pub" output="screen" />
+</launch>

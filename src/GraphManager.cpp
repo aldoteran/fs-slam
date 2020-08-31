@@ -17,13 +17,17 @@ GraphManager::GraphManager(const double prior_pos_stddev,
                            const Eigen::Vector3d imu_accel_noise_stddev,
                            const Eigen::Vector3d imu_omega_noise_stddev,
                            const Eigen::Vector3d imu_accel_bias_stddev,
-                           const Eigen::Vector3d imu_omega_bias_stddev)
+                           const Eigen::Vector3d imu_omega_bias_stddev,
+                           const Eigen::Vector3d init_accel_bias,
+                           const Eigen::Vector3d init_gyro_bias)
     : prior_pos_stddev_(prior_pos_stddev),
       prior_rot_stddev_(prior_rot_stddev),
       imu_accel_noise_stddev_(imu_accel_noise_stddev),
       imu_omega_noise_stddev_(imu_omega_noise_stddev),
       imu_accel_bias_stddev_(imu_accel_bias_stddev),
-      imu_omega_bias_stddev_(imu_omega_bias_stddev) {
+      imu_omega_bias_stddev_(imu_omega_bias_stddev),
+      init_accel_bias_(init_accel_bias),
+      init_gyro_bias_(init_gyro_bias) {
   SetupNoiseModels();
   SetupiSAM();
   SetupOdometers();
@@ -57,12 +61,16 @@ void GraphManager::SetupNoiseModels() {
                   imu_accel_noise_stddev_(2), imu_omega_noise_stddev_(0),
                   imu_omega_noise_stddev_(1), imu_omega_noise_stddev_(2);
     imu_noise_ = gtsam::noiseModel::Diagonal::Sigmas(imu_sigmas);
-    // Prior IMU bias.
+    // IMU bias random walk.
     gtsam::Vector imu_bias_sigmas(6);
     imu_bias_sigmas << imu_accel_bias_stddev_(0), imu_accel_bias_stddev_(1),
                        imu_accel_bias_stddev_(2), imu_omega_bias_stddev_(0),
                        imu_omega_bias_stddev_(1), imu_omega_bias_stddev_(2);
     imu_bias_noise_ = gtsam::noiseModel::Diagonal::Sigmas(imu_bias_sigmas);
+    // Initial IMU Bias
+    cur_imu_bias_ = gtsam::imuBias::ConstantBias(init_accel_bias_,
+                                                 init_gyro_bias_);
+
 }
 
 void GraphManager::SetupiSAM() {
@@ -75,7 +83,7 @@ void GraphManager::SetupOdometers() {
     // NOTE(tonioteran) this chooses a particular direction for the gravity
     // vector, explained here https://gtsam.org/doxygen/a00698_source.html.
     boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> p =
-      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(9.81);
+      gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedU(0);
 
     // TODO(tonioteran): pull out to params yaml.
     // This parameters are explained here: https://gtsam.org/doxygen/a03439.html
@@ -107,17 +115,17 @@ void GraphManager::SetupOdometers() {
 
 void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
     // Save initial state
-    initial_state_ = gtsam::NavState(pose, gtsam::Vector3(0,0,0));
-    gtsam::Pose3 sonar_init_pose = pose * sonar_extrinsics_;
+    //initial_state_ = gtsam::NavState(pose, gtsam::Vector3(0,0,0));
+    gtsam::Pose3 sonar_init_pose = initial_pose_ * sonar_extrinsics_;
 
     std::cout << " ---------- Graph Priors ----------- " << std::endl;
     std::cout << "IMU Initial Pose" << std::endl;
-    std::cout << pose << std::endl;
+    std::cout << initial_pose_ << std::endl;
     std::cout << "Sonar Initial Pose" << std::endl;
     std::cout << sonar_init_pose << std::endl;
 
     // Add prior factor to graph.
-    graph_.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), pose,
+    graph_.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), initial_pose_,
                                                           prior_noise_);
     // Add prior sonar factor to graph.
     graph_.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(S(0),
@@ -132,13 +140,13 @@ void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
           B(0), cur_imu_bias_, imu_bias_noise_);
 
     // Add initial estimates.
-    initial_estimates_.insert(X(0), pose);
+    initial_estimates_.insert(X(0), initial_pose_);
     initial_estimates_.insert(S(0), sonar_init_pose);
     initial_estimates_.insert(V(0), cur_vel_estimate_);
     initial_estimates_.insert(B(0), cur_imu_bias_);
     // Save initial pose as our current estimate.
-    cur_pose_estimate_ = pose;
-    dead_reckoning_ = pose;
+    cur_pose_estimate_ = initial_pose_;
+    dead_reckoning_ = initial_pose_;
     // Save initial origin for IMU preintegration
     cur_state_estimate_ = gtsam::NavState(cur_pose_estimate_, cur_vel_estimate_);
 
@@ -154,18 +162,27 @@ void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
 
 void GraphManager::AddImuMeasurement(const Eigen::Vector3d &accel,
                                      const Eigen::Vector3d &omega,
+                                     const gtsam::Rot3 &orientation,
                                      const double dt) {
+
+    gtsam::Rot3 imu_attitude = orientation;
+    if (imu_init_ == false){
+        initial_pose_ = gtsam::Pose3(imu_attitude, gtsam::Vector3(0.0,0.0,0.0));
+        initial_state_ = gtsam::NavState(initial_pose_, gtsam::Vector3(0.0,0.0,0.0));
+        dead_reckoned_state_ = initial_state_;
+        imu_init_ == true;
+    }
 
     // Preintegrate on both the `odometer_` and the `accumulator_`.
     odometer_->integrateMeasurement(accel, omega, dt);
     accumulator_->integrateMeasurement(accel, omega, dt);
 
     // Generate the dead-reckoned pose estimate.
-    //gtsam::NavState initial_state(initial_pose_, gtsam::Vector3(0,0,0));
     gtsam::imuBias::ConstantBias imu_bias;
-    gtsam::NavState dead_reckon = accumulator_->predict(initial_state_, imu_bias);
-    dead_reckoning_ = dead_reckon.pose();
+    dead_reckoned_state_ = accumulator_->predict(initial_state_, imu_bias);
+    dead_reckoning_ = dead_reckoned_state_.pose();
     gtsam::NavState odometry = odometer_->predict(cur_state_estimate_, cur_imu_bias_);
+    //gtsam::NavState odometry = odometer_->predict(initial_state_, imu_bias);
     odometry_ = odometry.pose();
 }
 
@@ -227,7 +244,7 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     // Update ISAM2
     isam2_.update(graph_, initial_estimates_);
 
-    for(int k = 0; k < 5; k++)
+    for(int k = 0; k < 3; k++)
         isam2_.update();
     gtsam::Values results = isam2_.calculateEstimate();
 
@@ -237,7 +254,8 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     cur_imu_bias_ = results.at<gtsam::imuBias::ConstantBias>(B(cur_frame_));
 
     // Reset odometer with new bias estimate
-    odometer_->resetIntegrationAndSetBias(cur_imu_bias_);
+    //odometer_->resetIntegrationAndSetBias(cur_imu_bias_);
+    odometer_->resetIntegration();
     std::cout << "ISAM2 Optimized Estimate" << std::endl;
     std::cout << cur_state_estimate_ << std::endl;
 
