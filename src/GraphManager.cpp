@@ -182,7 +182,6 @@ void GraphManager::AddImuMeasurement(const Eigen::Vector3d &accel,
     dead_reckoned_state_ = accumulator_->predict(initial_state_, imu_bias);
     dead_reckoning_ = dead_reckoned_state_.pose();
     gtsam::NavState odometry = odometer_->predict(cur_state_estimate_, cur_imu_bias_);
-    //gtsam::NavState odometry = odometer_->predict(initial_state_, imu_bias);
     odometry_ = odometry.pose();
 }
 
@@ -254,7 +253,6 @@ Eigen::Affine3d GraphManager::AddFactors(gtsam::Pose3 sonar_constraint,
     cur_imu_bias_ = results.at<gtsam::imuBias::ConstantBias>(B(cur_frame_));
 
     // Reset odometer with new bias estimate
-    //odometer_->resetIntegrationAndSetBias(cur_imu_bias_);
     odometer_->resetIntegration();
     std::cout << "ISAM2 Optimized Estimate" << std::endl;
     std::cout << cur_state_estimate_ << std::endl;

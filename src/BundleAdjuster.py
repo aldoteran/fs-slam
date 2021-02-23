@@ -114,7 +114,6 @@ class BundleAdjuster:
             U, S, V = np.linalg.svd(A, full_matrices=False)
             cond_nums = [np.max(S)/s for s in S]
             thresh = np.argmin((np.asarray(cond_nums)/100.0 - 1)**2)
-            # S[S<50.0] = 0.0
             S[S<thresh] = 0.0
 
             # (4) Update initial state
@@ -126,7 +125,6 @@ class BundleAdjuster:
                 return
 
             # (5) Check if converged
-            # pdb.set_trace()
             if np.linalg.norm(delta) < epsilon or it >= self.iters:
                 break
 
@@ -145,6 +143,9 @@ class BundleAdjuster:
             rospy.loginfo("Y: {}".format(T_Xb[1,-1]))
             rospy.loginfo("Z: {}".format(T_Xb[2,-1]))
         self._publish_pose_constraint(T_Xb, R_sqrt)
+
+        # Uncomment below to publish everything
+        # NOTE: Takes a lot of more resources
         # self._publish_pose(R_sqrt, T_Xb)
         # self._publish_true_odom(Xb)
         # self._publish_pointcloud(x_init, phis)
@@ -231,7 +232,6 @@ class BundleAdjuster:
 
         # Get logmap of R to insert in inital state
         log_phi = np.arccos((np.trace(rot)-1)/2)
-        # TODO(aldoteran): check if need to wrap to pi
         omega_hat = (log_phi/(2*np.sin(log_phi))) * (rot - rot.transpose())
         omega = np.array([[omega_hat[-1,1]],
                           [omega_hat[0,-1]],
@@ -426,16 +426,9 @@ class BundleAdjuster:
         sonar_constraint.pose.pose.orientation.z = quat[2]
         sonar_constraint.pose.pose.orientation.w = quat[3]
         R = np.eye(6) *0.0001
-        # R[2,2] = 10k0
-        # R[]
+
         sonar_constraint.pose.covariance = R.ravel().tolist()
-        # sonar_constraint.pose.covariance = np.eye(6).ravel().tolist()
         self.pose_constraint_pub.publish(sonar_constraint)
-        # self.tf_pub.sendTransform((trans_Xb[0,0], trans_Xb[1,0], trans_Xb[2,0]),
-                                  # quat, rospy.Time.now(),
-                                  # "bundle_adjustment/sonar_pose_constraint",
-                                  # # "slam/dead_reckoning/sonar_pose")
-                                  # "rexrov/sonar_pose")
 
     def _publish_pose(self, R, T_Xb):
         """

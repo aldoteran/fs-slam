@@ -116,8 +116,7 @@ class LandmarkDetector:
         # Get pose
         try:
             trans, rot = self.tf_listener.lookupTransform('/world',
-                                                        # '/slam/optimized/sonar_pose',
-                                                        '/fiducials/sonar_pose',
+                                                        '/slam/optimized/sonar_pose',
                                                         rospy.Time(0))
             pose = tf.transformations.quaternion_matrix(rot)
             pose[:-1, -1] = np.asarray(trans)
