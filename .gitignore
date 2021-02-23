@@ -15,6 +15,7 @@ ehthumbs.db
 # Binaries #
 ############
 *.pyc
+*.pkl
 
 # Latex #
 #########

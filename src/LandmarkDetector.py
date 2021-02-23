@@ -62,8 +62,6 @@ class Landmark:
             self.elevation = 0.0
             # measurements in polar coordinates
             self.polar_img1 = self.cart_to_polar(self.cart_img1)
-            # TODO(aldoteran): check if simulated measurements can be fixed
-            # self.polar_img2 = self.cart_to_noisy_polar(self.cart_img1, T_Xb)
             self.polar_img2 = self.cart_to_polar(self.cart_img2)
             # ground truth for phi, for debugging
             self.real_phi = np.arcsin(self.cart_img1[2,0]/self.polar_img1[1,0])
@@ -222,8 +220,6 @@ class LandmarkDetector:
         """
         sonar_frame = 'rexrov/sonar_pose'
         try:
-            # self.tf_listener.waitForTransform('/world', '/slam/optimized/sonar_pose',
-                                                # imgs[0][1], rospy.Duration(0.2))
             trans_Xa, rot_Xa = self.tf_listener.lookupTransform('/world',
                                                                 '/slam/optimized/sonar_pose',
                                                                 imgs[0][1])
