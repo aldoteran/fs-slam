@@ -476,10 +476,8 @@ class BundleAdjuster:
         sonar_pose.pose.orientation.y = quat[1]
         sonar_pose.pose.orientation.z = quat[2]
         sonar_pose.pose.orientation.w = quat[3]
-        # sonar_pose.covariance = R.ravel().tolist()
-        sonar_pose.covariance = np.eye(6).ravel().tolist()
+        sonar_pose.covariance = R.ravel().tolist()
         sonar_odom = Odometry()
-        # sonar_odom.header.frame_id = "/rexrov/sonar_pose"
         sonar_odom.header.frame_id = "/world"
         sonar_odom.child_frame_id = "bundle_adjustment/sonar_estimate"
         sonar_odom.header.stamp = rospy.Time.now()

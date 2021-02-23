@@ -100,11 +100,9 @@ void SlamNode::InitGraphManager() {
 }
 
 void SlamNode::InitState() {
-    //if (is_init_ == true){
     gm_->InitFactorGraph(init_pose_);
     // Publish first optimized pose and TF
     PublishOptimizedPath(Eigen::Affine3d(init_pose_.matrix()));
-    //}
 }
 
 void SlamNode::ImuMeasCallback(const sensor_msgs::Imu &msg) {
@@ -161,7 +159,6 @@ void SlamNode::SonarPoseCallback(
         // Publish the pose
         PublishOptimizedPath(opt_pose);
         PublishSonarTF();
-        //PublishTruePath();
     }
 }
 

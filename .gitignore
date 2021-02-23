@@ -80,3 +80,5 @@ build/
 *.bag
 
 tests/
+rosbag_plots.py
+compensate_bias.py

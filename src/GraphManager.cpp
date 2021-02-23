@@ -115,7 +115,6 @@ void GraphManager::SetupOdometers() {
 
 void GraphManager::InitFactorGraph(const gtsam::Pose3 &pose) {
     // Save initial state
-    //initial_state_ = gtsam::NavState(pose, gtsam::Vector3(0,0,0));
     gtsam::Pose3 sonar_init_pose = initial_pose_ * sonar_extrinsics_;
 
     std::cout << " ---------- Graph Priors ----------- " << std::endl;
