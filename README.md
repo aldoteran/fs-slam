@@ -1,4 +1,4 @@
-# Forward-Scan Simultaneous Localization and Mapping
+# Forward-Scan Sonar Simultaneous Localization and Mapping
 
 Code used for my degree project on simulataneous localization and mapping using an
 fs-sonar.
